@@ -52,7 +52,7 @@ wire [31:0] inst_id;
 wire [31:0] pc_id;
 wire [31:0] src1_to_exe;
 wire [31:0] src2_to_exe;
-wire [11:0] alu_op_to_exe;
+wire [18:0] alu_op_to_exe;
 wire [4:0]  dest_to_exe;
 wire        reg_en_to_exe;
 wire [1:0]  mem_en_to_exe;
@@ -62,6 +62,7 @@ wire [4:0]  raddr1;
 wire [4:0]  raddr2;
 wire [31:0] rdata2_to_exe;
 wire [31:0] rdata1_to_exe;
+wire        div_en_to_exe;
 ID ID_PART(
     .clk            (clk            ),
     .reset          (reset          ),
@@ -82,6 +83,7 @@ ID ID_PART(
     .src1           (src1_to_exe   ),
     .src2           (src2_to_exe   ),
     .reg_en        (reg_en_to_exe ),
+    .div_en        (div_en_to_exe ),
     .mem_en         (mem_en_to_exe ),
     .rdata2_to_exe  (rdata2_to_exe ), 
     .rdata1_to_exe  (rdata1_to_exe),    
@@ -130,6 +132,7 @@ EXE EXE_PART(
     .alu_op_from_id (alu_op_to_exe),
     .dest_from_id   (dest_to_exe   ),
     .reg_en_from_id (reg_en_to_exe),
+    .div_en_from_id (div_en_to_exe ),
     .mem_en_from_id (mem_en_to_exe),
     .rdata2_from_id (rdata2_to_exe ),
     .rdata1_from_id (rdata1_to_exe ),

@@ -1,0 +1,378 @@
+From 8a37e5121b3e37c4e2c410a6f2b20e3ed26d087c Mon Sep 17 00:00:00 2001
+From: parooNiria <paroniria2025@163.com>
+Date: Thu, 16 Oct 2025 20:47:47 +0800
+Subject: [PATCH] exp10 first commit
+
+---
+ exp10/myCPU/EXE.v       | 114 +++++++++++++++++++++++++++++++++++++---
+ exp10/myCPU/ID.v        |  89 ++++++++++++++++++++++++-------
+ exp10/myCPU/mycpu_top.v |   5 +-
+ 3 files changed, 179 insertions(+), 29 deletions(-)
+
+diff --git a/exp10/myCPU/EXE.v b/exp10/myCPU/EXE.v
+index f2ed3db..76ee42c 100644
+--- a/exp10/myCPU/EXE.v
++++ b/exp10/myCPU/EXE.v
+@@ -8,10 +8,11 @@ module EXE(
+     input [31:0]    pc_from_id,
+     input [31:0]    src1_from_id,
+     input [31:0]    src2_from_id,
+-    input [11:0]    alu_op_from_id,
++    input [18:0]    alu_op_from_id,
+     input [4:0]     dest_from_id,
+     input           reg_en_from_id,
+     input [1:0]     mem_en_from_id,
++    input           div_en_from_id,
+     input [31:0]    rdata2_from_id,
+     input [31:0]    rdata1_from_id,
+     //to MEM
+@@ -45,12 +46,105 @@ module EXE(
+             valid <= 1'b0;
+         end
+     end
++    wire [31:0] alu_result_without_div_mul;
++    wire [31:0] alu_result_with_div;
+     alu u_alu(
+-    .alu_op     (alu_op_reg   ),
++    .alu_op     (alu_op_reg[11:0]   ),
+     .alu_src1   (src1_reg   ),
+     .alu_src2   (src2_reg   ),
+-    .alu_result (alu_result     )
++    .alu_result (alu_result_without_div_mul     )
+     );
++    //mul part
++    wire [63:0] unsigned_mul;
++    wire [63:0] signed_mul;
++    assign unsigned_mul = (src1_reg * src2_reg);
++    assign signed_mul = ($signed(src1_reg) * $signed(src2_reg));
++    wire [31:0] alu_result_mul;
++    wire [31:0] mul_w_result;
++    wire [31:0] mulh_w_result;
++    wire [31:0] mulh_wu_result;
++    assign mul_w_result = unsigned_mul[31:0];
++    assign mulh_w_result = signed_mul[63:32];
++    assign mulh_wu_result = unsigned_mul[63:32];
++    assign alu_result_mul = ({32{alu_op_reg[12]}} & mul_w_result)
++                          | ({32{alu_op_reg[13]}} & mulh_w_result)
++                          | ({32{alu_op_reg[14]}} & mulh_wu_result);
++    //div part
++    reg [2:0]     current_state;
++    always @(posedge clk) begin
++        if (reset) begin
++            current_state <= 3'b001;
++        end
++        else if (div_en_from_id & allow_in & ready_go_id) begin
++            current_state <= 3'b010;
++        end
++        else if(current_state[1]&commit) begin
++            current_state <= 3'b100;
++        end
++        else if(current_state[2]&div_result_ready) begin
++            current_state <= 3'b001;
++        end
++    end
++    wire signed_div;
++    assign signed_div = alu_op_reg[15]|alu_op_reg[16];
++    wire tvalid_div_signed;
++    wire tvalid_div_unsigned;
++    wire tready_divisor_signed;
++    wire tready_dividend_signed;
++    wire tready_dividend_unsigned;
++    wire tready_divisor_unsigned;
++    wire tready_result_signed;
++    wire tready_result_unsigned;
++    assign tvalid_div_signed = current_state[1] & signed_div;
++    assign tvalid_div_unsigned = current_state[1] & ~signed_div;
++    wire commit_signed;
++    wire commit_unsigned;
++    wire commit;
++    wire div_result_ready;
++    assign div_result_ready = signed_div ? tready_result_signed : tready_result_unsigned;
++    assign commit_signed = tvalid_div_signed & tready_divisor_signed & tready_dividend_signed;
++    assign commit_unsigned = tvalid_div_unsigned & tready_divisor_unsigned & tready_dividend_unsigned;
++    assign commit = signed_div ? commit_signed : commit_unsigned;
++    wire [63:0] alu_result_signed;
++    wire [63:0] alu_result_unsigned;
++    div_signed u_div_signed(
++        .aclk(clk),
++        .s_axis_dividend_tvalid(tvalid_div_signed),
++        .s_axis_dividend_tready(tready_dividend_signed),
++        .s_axis_dividend_tdata(src1_reg),
++        .s_axis_divisor_tvalid(tvalid_div_signed),
++        .s_axis_divisor_tready(tready_divisor_signed),
++        .s_axis_divisor_tdata(src2_reg),
++        .m_axis_dout_tvalid(tready_result_signed),
++        .m_axis_dout_tdata(alu_result_signed)
++    );
++
++    div_unsigned u_div_unsigned(
++        .aclk(clk),
++        .s_axis_dividend_tvalid(tvalid_div_unsigned),
++        .s_axis_dividend_tready(tready_dividend_unsigned),
++        .s_axis_dividend_tdata(src1_reg),
++        .s_axis_divisor_tvalid(tvalid_div_unsigned),
++        .s_axis_divisor_tready(tready_divisor_unsigned),
++        .s_axis_divisor_tdata(src2_reg),
++        .m_axis_dout_tvalid(tready_result_unsigned),
++        .m_axis_dout_tdata(alu_result_unsigned)
++    );
++    wire [31:0] div_result_signed;
++    wire [31:0] div_result_unsigned;
++    wire [31:0] mod_result_signed;
++    wire [31:0] mod_result_unsigned;
++    assign div_result_signed = alu_result_signed[63:32];
++    assign mod_result_signed = alu_result_signed[31:0];
++    assign div_result_unsigned = alu_result_unsigned[63:32];
++    assign mod_result_unsigned = alu_result_unsigned[31:0];
++    assign alu_result_with_div = ({32{alu_op_reg[15]}} & div_result_signed)
++                              | ({32{alu_op_reg[16]}} & mod_result_signed)
++                              | ({32{alu_op_reg[17]}} & div_result_unsigned)
++                              | ({32{alu_op_reg[18]}} & mod_result_unsigned);
++    assign alu_result = (mul_type & valid) ? alu_result_mul :
++                    (div_en_reg & valid) ? alu_result_with_div : alu_result_without_div_mul;
++
+     assign reg_en     = reg_en_reg;
+     reg [31:0] rdata2_reg;
+     reg [31:0] rdata1_reg;
+@@ -58,10 +152,11 @@ module EXE(
+     reg [31:0] pc_reg;
+     reg [31:0] src1_reg;
+     reg [31:0] src2_reg;
+-    reg [11:0] alu_op_reg;
++    reg [18:0] alu_op_reg;
+     reg [4:0]  dest_reg;
+     reg        reg_en_reg;
+     reg [1:0]  mem_en_reg;
++    reg        div_en_reg;
+     always @(posedge clk) begin
+         if (reset) begin
+             inst_reg   <= 32'b0;
+@@ -74,6 +169,7 @@ module EXE(
+             mem_en_reg <= 2'b0;
+             rdata2_reg <= 32'b0;
+             rdata1_reg <= 32'b0;
++            div_en_reg <= 1'b0;
+         end
+         else if (ready_go_id &allow_in) begin
+             inst_reg   <= inst_from_id;
+@@ -86,12 +182,14 @@ module EXE(
+             mem_en_reg <= mem_en_from_id;
+             rdata2_reg <= rdata2_from_id;
+             rdata1_reg <= rdata1_from_id;
++            div_en_reg <= div_en_from_id;
+         end
+     end
+-
++    wire mul_type;
++    assign mul_type = alu_op_reg[12]|alu_op_reg[13]|alu_op_reg[14];
+     assign dest       = dest_reg;
+     assign allow_in   = ~valid | (ready_go&&MEM_allow_in);
+-    assign ready_go   = valid;
++    assign ready_go   = valid&((!div_en_reg) | (current_state==3'b100&&div_result_ready));
+     assign inst_exe   = inst_reg;
+     assign pc_exe     = pc_reg;
+     assign data_sram_en    = valid;
+@@ -99,6 +197,6 @@ module EXE(
+     assign data_sram_addr  = alu_result;
+     assign data_sram_wdata = rdata2_reg;
+     assign mem_ld     = (mem_en_reg==2'b01);
+-    assign forward_data_exe = alu_result;
+-    assign forward_en_exe = (mem_en_reg!=2'b01);
++    assign forward_data_exe = alu_result_without_div_mul;
++    assign forward_en_exe = (mem_en_reg!=2'b01)&&(div_en_reg==1'b0)&&(mul_type==1'b0);
+ endmodule
+\ No newline at end of file
+diff --git a/exp10/myCPU/ID.v b/exp10/myCPU/ID.v
+index 54fd010..657c8b5 100644
+--- a/exp10/myCPU/ID.v
++++ b/exp10/myCPU/ID.v
+@@ -13,12 +13,13 @@ module ID(
+     input           EX_allow_in,
+     output [31:0]   inst_id,
+     output [31:0]   pc_id,
+-    output [11:0]   alu_op_id,
++    output [18:0]   alu_op_id,
+     output [4:0]    dest,
+     output [31:0]   src1,
+     output [31:0]   src2,
+     output          reg_en,
+-    output [1:0]    mem_en, 
++    output [1:0]    mem_en,
++    output          div_en, 
+     output [31:0]   rdata1_to_exe,//spare for inst store 
+     output [31:0]   rdata2_to_exe, //not used now,spare for future
+     //to regfile
+@@ -75,6 +76,22 @@ module ID(
+     wire        inst_beq;
+     wire        inst_bne;
+     wire        inst_lu12i_w;
++    wire        inst_slti;
++    wire        inst_sltiu;
++    wire        inst_andi;
++    wire        inst_ori;
++    wire        inst_xori;
++    wire        inst_sll_w;
++    wire        inst_srl_w;
++    wire        inst_sra_w;
++    wire        inst_pcaddu12i;
++    wire        inst_mul_w;
++    wire        inst_mulh_w;
++    wire        inst_mulh_wu;
++    wire        inst_div_w;
++    wire        inst_mod_w;
++    wire        inst_div_wu;
++    wire        inst_mod_wu;
+ 
+     wire        need_ui5;
+     wire        need_si12;
+@@ -149,22 +166,45 @@ module ID(
+     assign inst_beq    = op_31_26_d[6'h16];
+     assign inst_bne    = op_31_26_d[6'h17];
+     assign inst_lu12i_w= op_31_26_d[6'h05] & ~inst_reg[25];
+-    wire [11:0] alu_op;
++    assign inst_slti   = op_31_26_d[6'h00] & op_25_22_d[4'h8];
++    assign inst_sltiu  = op_31_26_d[6'h00] & op_25_22_d[4'h9];
++    assign inst_andi   = op_31_26_d[6'h00] & op_25_22_d[4'hd];
++    assign inst_ori    = op_31_26_d[6'h00] & op_25_22_d[4'he];
++    assign inst_xori   = op_31_26_d[6'h00] & op_25_22_d[4'hf];
++    assign inst_sll_w  = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'he];
++    assign inst_srl_w  = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'hf];
++    assign inst_sra_w  = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'h10];
++    assign inst_pcaddu12i = op_31_26_d[6'h7] &~inst_reg[25];
++    assign inst_mul_w  = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'h18];
++    assign inst_mulh_w = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'h19];
++    assign inst_mulh_wu= op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'h1a];
++    assign inst_div_w  = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h0];
++    assign inst_mod_w  = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h1];
++    assign inst_div_wu = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h2];
++    assign inst_mod_wu = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h3];
++    wire [18:0] alu_op;
+     assign alu_op_id = alu_op;
+     assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_w | inst_st_w
+-                    | inst_jirl | inst_bl;
++                    | inst_jirl | inst_bl | inst_pcaddu12i;
+     assign alu_op[ 1] = inst_sub_w;
+-    assign alu_op[ 2] = inst_slt;
+-    assign alu_op[ 3] = inst_sltu;
+-    assign alu_op[ 4] = inst_and;
++    assign alu_op[ 2] = inst_slt|inst_slti;
++    assign alu_op[ 3] = inst_sltu|inst_sltiu;
++    assign alu_op[ 4] = inst_and|inst_andi;
+     assign alu_op[ 5] = inst_nor;
+-    assign alu_op[ 6] = inst_or;
+-    assign alu_op[ 7] = inst_xor;
+-    assign alu_op[ 8] = inst_slli_w;
+-    assign alu_op[ 9] = inst_srli_w;
+-    assign alu_op[10] = inst_srai_w;
++    assign alu_op[ 6] = inst_or|inst_ori;
++    assign alu_op[ 7] = inst_xor|inst_xori;
++    assign alu_op[ 8] = inst_slli_w|inst_sll_w;
++    assign alu_op[ 9] = inst_srli_w|inst_srl_w;
++    assign alu_op[10] = inst_srai_w|inst_sra_w;
+     assign alu_op[11] = inst_lu12i_w;
+-
++    assign alu_op[12] = inst_mul_w;
++    assign alu_op[13] = inst_mulh_w;
++    assign alu_op[14] = inst_mulh_wu;
++    assign alu_op[15] = inst_div_w;
++    assign alu_op[16] = inst_mod_w;
++    assign alu_op[17] = inst_div_wu;
++    assign alu_op[18] = inst_mod_wu;
++    assign div_en = (inst_div_w | inst_mod_w | inst_div_wu | inst_mod_wu);
+     //to regfile 
+     wire src_reg_is_rd;
+     assign src_reg_is_rd = inst_beq | inst_bne | inst_st_w;
+@@ -174,7 +214,7 @@ module ID(
+     //src
+     wire src1_is_pc;
+     wire src2_is_imm;
+-    assign src1_is_pc    = inst_jirl | inst_bl;
++    assign src1_is_pc    = inst_jirl | inst_bl | inst_pcaddu12i;
+     assign src2_is_imm   =  inst_slli_w |
+                             inst_srli_w |
+                             inst_srai_w |
+@@ -183,19 +223,27 @@ module ID(
+                             inst_st_w   |
+                             inst_lu12i_w|
+                             inst_jirl   |
+-                            inst_bl     ; 
++                            inst_bl     |
++                            inst_slti   |
++                            inst_sltiu  |
++                            inst_andi   |
++                            inst_ori    |
++                            inst_xori   |
++                            inst_pcaddu12i;
+ 
+     //aboat imm
+     assign need_ui5   =  inst_slli_w | inst_srli_w | inst_srai_w;
+-    assign need_si12  =  inst_addi_w | inst_ld_w | inst_st_w;
++    assign need_si12  =  inst_addi_w | inst_ld_w | inst_st_w| inst_slti | inst_sltiu ;
++    assign need_si12_unsigned  = inst_andi | inst_ori | inst_xori ; 
+     assign need_si16  =  inst_jirl | inst_beq | inst_bne;
+-    assign need_si20  =  inst_lu12i_w;
++    assign need_si20  =  inst_lu12i_w | inst_pcaddu12i;
+     assign need_si26  =  inst_b | inst_bl;
+     assign src2_is_4  =  inst_jirl | inst_bl;
+     wire [31:0] imm;
+     assign imm = src2_is_4 ? 32'h4                      :
+                 need_si20 ? {i20[19:0], 12'b0}         :
+-    /*need_ui5 || need_si12*/{{20{i12[11]}}, i12[11:0]} ;
++                need_si12 ? {{20{i12[11]}}, i12[11:0]}  :
++                {{20{1'b0}}, i12[11:0]}  ;
+ 
+ //about flush
+     wire [31:0]     rj_value;
+@@ -258,9 +306,10 @@ module ID(
+     
+     //about conflict
+     wire   no_rj;
+-    assign no_rj = inst_b | inst_lu12i_w | inst_bl;
++    assign no_rj = inst_b | inst_lu12i_w | inst_bl | inst_pcaddu12i;
+     wire   have_rk;
+-    assign have_rk = inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_nor | inst_and | inst_or | inst_xor;
++    assign have_rk = inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_nor | inst_and | inst_or | inst_xor | inst_mul_w | inst_mulh_w | inst_mulh_wu
++                  | inst_div_w | inst_mod_w | inst_div_wu | inst_mod_wu | inst_sll_w | inst_srl_w | inst_sra_w;
+     wire   have_rd;
+     assign have_rd = inst_st_w | inst_beq | inst_bne;
+     wire   conflict_rj;
+diff --git a/exp10/myCPU/mycpu_top.v b/exp10/myCPU/mycpu_top.v
+index da25378..7550eb0 100644
+--- a/exp10/myCPU/mycpu_top.v
++++ b/exp10/myCPU/mycpu_top.v
+@@ -52,7 +52,7 @@ wire [31:0] inst_id;
+ wire [31:0] pc_id;
+ wire [31:0] src1_to_exe;
+ wire [31:0] src2_to_exe;
+-wire [11:0] alu_op_to_exe;
++wire [18:0] alu_op_to_exe;
+ wire [4:0]  dest_to_exe;
+ wire        reg_en_to_exe;
+ wire [1:0]  mem_en_to_exe;
+@@ -62,6 +62,7 @@ wire [4:0]  raddr1;
+ wire [4:0]  raddr2;
+ wire [31:0] rdata2_to_exe;
+ wire [31:0] rdata1_to_exe;
++wire        div_en_to_exe;
+ ID ID_PART(
+     .clk            (clk            ),
+     .reset          (reset          ),
+@@ -82,6 +83,7 @@ ID ID_PART(
+     .src1           (src1_to_exe   ),
+     .src2           (src2_to_exe   ),
+     .reg_en        (reg_en_to_exe ),
++    .div_en        (div_en_to_exe ),
+     .mem_en         (mem_en_to_exe ),
+     .rdata2_to_exe  (rdata2_to_exe ), 
+     .rdata1_to_exe  (rdata1_to_exe),    
+@@ -130,6 +132,7 @@ EXE EXE_PART(
+     .alu_op_from_id (alu_op_to_exe),
+     .dest_from_id   (dest_to_exe   ),
+     .reg_en_from_id (reg_en_to_exe),
++    .div_en_from_id (div_en_to_exe ),
+     .mem_en_from_id (mem_en_to_exe),
+     .rdata2_from_id (rdata2_to_exe ),
+     .rdata1_from_id (rdata1_to_exe ),
+-- 
+2.44.0.windows.1
+

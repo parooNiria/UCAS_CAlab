@@ -55,7 +55,7 @@ wire [31:0] src2_to_exe;
 wire [18:0] alu_op_to_exe;
 wire [4:0]  dest_to_exe;
 wire        reg_en_to_exe;
-wire [1:0]  mem_en_to_exe;
+wire [4:0]  mem_en_to_exe;
 wire [31:0] rdata1;
 wire [31:0] rdata2;
 wire [4:0]  raddr1;
@@ -112,7 +112,7 @@ wire [31:0] inst_exe;
 wire [31:0] pc_exe;
 wire [31:0] alu_result_exe;
 wire        reg_en_to_mem;
-wire        mem_ld_exe;
+wire [4:0]  mem_ld_message;
 wire [4:0]  dest_to_mem;
 wire        exe_valid;
 wire        ex_reg_en_valid;
@@ -143,7 +143,7 @@ EXE EXE_PART(
     .pc_exe         (pc_exe        ),
     .alu_result     (alu_result_exe),
     .reg_en        (reg_en_to_mem ),
-    .mem_ld         (mem_ld_exe    ),
+    .mem_ld_message         (mem_ld_message   ),
     .dest           (dest_to_mem   ),
     //to dram
     .data_sram_en   (data_sram_en  ),
@@ -177,7 +177,7 @@ MEM MEM_PART(
     .inst_from_exe (inst_exe       ),
     .pc_from_exe   (pc_exe         ),
     .reg_en_from_exe(reg_en_to_mem ),
-    .mem_ld_from_exe(mem_ld_exe    ),
+    .mem_ld_from_exe(mem_ld_message),
     .dest_from_exe (dest_to_mem    ),
     .alu_result_from_exe(alu_result_exe),
     //to WB

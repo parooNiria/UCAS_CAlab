@@ -11,7 +11,7 @@ module EXE(
     input [18:0]    alu_op_from_id,
     input [4:0]     dest_from_id,
     input           reg_en_from_id,
-    input [1:0]     mem_en_from_id,
+    input [4:0]     mem_en_from_id,
     input           div_en_from_id,
     input [31:0]    rdata2_from_id,
     input [31:0]    rdata1_from_id,
@@ -22,7 +22,7 @@ module EXE(
     output [31:0]   pc_exe,
     output [31:0]   alu_result,
     output          reg_en,
-    output          mem_ld,
+    output [4:0]    mem_ld_message,
     output [4:0]    dest,
     //to dram
     output wire        data_sram_en,
@@ -155,7 +155,7 @@ module EXE(
     reg [18:0] alu_op_reg;
     reg [4:0]  dest_reg;
     reg        reg_en_reg;
-    reg [1:0]  mem_en_reg;
+    reg [4:0]  mem_en_reg;
     reg        div_en_reg;
     always @(posedge clk) begin
         if (reset) begin
@@ -166,7 +166,7 @@ module EXE(
             alu_op_reg <= 12'b0;
             dest_reg   <= 5'b0;
             reg_en_reg <= 1'b0;
-            mem_en_reg <= 2'b0;
+            mem_en_reg <= 5'b0;
             rdata2_reg <= 32'b0;
             rdata1_reg <= 32'b0;
             div_en_reg <= 1'b0;
@@ -192,11 +192,38 @@ module EXE(
     assign ready_go   = valid&((!div_en_reg) | (current_state==3'b100&&div_result_ready));
     assign inst_exe   = inst_reg;
     assign pc_exe     = pc_reg;
-    assign data_sram_en    = valid;
-    assign data_sram_we    = (mem_en_reg==2'b11 ? 4'b1111:0)&{4{valid}};
-    assign data_sram_addr  = alu_result;
-    assign data_sram_wdata = rdata2_reg;
-    assign mem_ld     = (mem_en_reg==2'b01);
     assign forward_data_exe = alu_result_without_div_mul;
-    assign forward_en_exe = (mem_en_reg!=2'b01)&&(div_en_reg==1'b0)&&(mul_type==1'b0);
+    assign forward_en_exe = (~mem_ld)&&(div_en_reg==1'b0)&&(mul_type==1'b0);
+//mem deal part
+    wire   mem_type;
+    wire   mem_st;
+    wire   mem_ld;
+    wire   mem_b;
+    wire   mem_h;
+    wire   mem_bu;
+    wire   mem_hu;
+    wire   mem_w;
+    assign mem_type = mem_en_reg[4];
+    assign mem_ld = mem_type & mem_en_reg[3];
+    assign mem_st = mem_type & ~mem_en_reg[3];
+    assign mem_b  = mem_type & mem_en_reg[1:0]==2'b01 & ~mem_en_reg[2];
+    assign mem_h  = mem_type & mem_en_reg[1:0]==2'b10 & ~mem_en_reg[2];
+    assign mem_bu = mem_type & mem_en_reg[1:0]==2'b01 & mem_en_reg[2];
+    assign mem_hu = mem_type & mem_en_reg[1:0]==2'b10 & mem_en_reg[2];
+    assign mem_w  = mem_type & mem_en_reg[1:0]==2'b11;
+    assign mem_ld_message = {5{mem_ld}}&{mem_w,mem_h,mem_b,mem_hu,mem_bu};
+    wire   [3:0]wen_half;
+    assign wen_half = {4{alu_result[1]}}&4'b1100 | {4{~alu_result[1]}}&4'b0011;
+    wire   [3:0]wen_b;
+    assign wen_b = 4'b0001 << alu_result[1:0];
+    assign data_sram_en    = valid;
+    assign data_sram_we    = (mem_w?4'b1111:
+                              mem_h?wen_half:
+                              mem_b?wen_b:4'b0000
+                            )&{4{valid}}&{4{mem_st}};
+    assign data_sram_addr  = {alu_result[31:2],2'b00};
+    assign data_sram_wdata = mem_b ? {4{rdata2_reg[7:0]}} :
+                             mem_h ? {2{rdata2_reg[15:0]}} :
+                            rdata2_reg;
+
 endmodule

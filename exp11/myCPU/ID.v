@@ -18,7 +18,7 @@ module ID(
     output [31:0]   src1,
     output [31:0]   src2,
     output          reg_en,
-    output [1:0]    mem_en,
+    output [4:0]    mem_en,
     output          div_en, 
     output [31:0]   rdata1_to_exe,//spare for inst store 
     output [31:0]   rdata2_to_exe, //not used now,spare for future
@@ -92,6 +92,16 @@ module ID(
     wire        inst_mod_w;
     wire        inst_div_wu;
     wire        inst_mod_wu;
+    wire        inst_blt;
+    wire        inst_bge;
+    wire        inst_bltu;
+    wire        inst_bgeu;
+    wire        inst_ld_b;
+    wire        inst_ld_h;
+    wire        inst_ld_bu;
+    wire        inst_ld_hu;
+    wire        inst_st_b;
+    wire        inst_st_h;
 
     wire        need_ui5;
     wire        need_si12;
@@ -182,10 +192,20 @@ module ID(
     assign inst_mod_w  = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h1];
     assign inst_div_wu = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h2];
     assign inst_mod_wu = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h3];
+    assign inst_blt    = op_31_26_d[6'h18];
+    assign inst_bge    = op_31_26_d[6'h19];
+    assign inst_bltu   = op_31_26_d[6'h1a];
+    assign inst_bgeu   = op_31_26_d[6'h1b];
+    assign inst_ld_b   = op_31_26_d[6'h0a] & op_25_22_d[4'h0];
+    assign inst_ld_h   = op_31_26_d[6'h0a] & op_25_22_d[4'h1];
+    assign inst_st_b   = op_31_26_d[6'h0a] & op_25_22_d[4'h4];
+    assign inst_st_h   = op_31_26_d[6'h0a] & op_25_22_d[4'h5];
+    assign inst_ld_bu  = op_31_26_d[6'h0a] & op_25_22_d[4'h8];
+    assign inst_ld_hu  = op_31_26_d[6'h0a] & op_25_22_d[4'h9];
     wire [18:0] alu_op;
     assign alu_op_id = alu_op;
     assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_w | inst_st_w
-                    | inst_jirl | inst_bl | inst_pcaddu12i;
+                    | inst_jirl | inst_bl | inst_pcaddu12i | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_st_b | inst_st_h;
     assign alu_op[ 1] = inst_sub_w;
     assign alu_op[ 2] = inst_slt|inst_slti;
     assign alu_op[ 3] = inst_sltu|inst_sltiu;
@@ -207,7 +227,7 @@ module ID(
     assign div_en = (inst_div_w | inst_mod_w | inst_div_wu | inst_mod_wu);
     //to regfile 
     wire src_reg_is_rd;
-    assign src_reg_is_rd = inst_beq | inst_bne | inst_st_w;
+    assign src_reg_is_rd = inst_beq | inst_bne | inst_st_w | inst_blt | inst_bge | inst_bltu | inst_bgeu | inst_st_b | inst_st_h;
     assign raddr1 = rj;
     assign raddr2 = src_reg_is_rd ? rd : rk;
 
@@ -229,13 +249,19 @@ module ID(
                             inst_andi   |
                             inst_ori    |
                             inst_xori   |
-                            inst_pcaddu12i;
+                            inst_pcaddu12i|
+                            inst_st_b   |
+                            inst_st_h   |
+                            inst_ld_b   |
+                            inst_ld_h   |
+                            inst_ld_bu  |
+                            inst_ld_hu  ;
 
-    //aboat imm
+    //about imm
     assign need_ui5   =  inst_slli_w | inst_srli_w | inst_srai_w;
-    assign need_si12  =  inst_addi_w | inst_ld_w | inst_st_w| inst_slti | inst_sltiu ;
+    assign need_si12  =  inst_addi_w | inst_ld_w | inst_st_w| inst_slti | inst_sltiu | inst_st_b | inst_st_h | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu;
     assign need_si12_unsigned  = inst_andi | inst_ori | inst_xori ; 
-    assign need_si16  =  inst_jirl | inst_beq | inst_bne;
+    assign need_si16  =  inst_jirl | inst_beq | inst_bne | inst_blt | inst_bge | inst_bltu | inst_bgeu;
     assign need_si20  =  inst_lu12i_w | inst_pcaddu12i;
     assign need_si26  =  inst_b | inst_bl;
     assign src2_is_4  =  inst_jirl | inst_bl;
@@ -251,6 +277,8 @@ module ID(
     wire [31:0]     rk_value;
     wire [31:0]     rkd_value;
     wire            rj_eq_rd;
+    wire            rj_less_rd_signed;
+    wire            rj_less_rd_unsigned;
     assign rj_value  =  (compare_rj_exe & forward_en_from_exe) ? forward_data_from_exe :
                         (compare_rj_mem) ? forward_data_from_mem :
                         (compare_rj_wb)  ? forward_data_from_wb  :
@@ -265,8 +293,14 @@ module ID(
                                             rdata2;
     assign rkd_value = src_reg_is_rd ? rd_value : rk_value; 
     assign rj_eq_rd = (rj_value == rd_value);
+    assign rj_less_rd_signed = ($signed(rj_value) < $signed(rd_value));
+    assign rj_less_rd_unsigned = (rj_value < rd_value);
     assign br_taken = (   inst_beq  &&  rj_eq_rd
                     || inst_bne  && !rj_eq_rd
+                    || inst_blt  &&  rj_less_rd_signed
+                    || inst_bge  && !rj_less_rd_signed
+                    || inst_bltu &&  rj_less_rd_unsigned
+                    || inst_bgeu && !rj_less_rd_unsigned
                     || inst_jirl
                     || inst_bl
                     || inst_b
@@ -275,7 +309,7 @@ module ID(
     wire [31:0] br_offs;
     wire [31:0] jirl_offs;
     assign flush = valid&~conflict&br_taken;
-    assign newpc = (inst_beq || inst_bne || inst_bl || inst_b) ? (pc_reg + br_offs) :
+    assign newpc = (inst_beq || inst_bne || inst_bl || inst_b || inst_blt || inst_bge || inst_bltu || inst_bgeu) ? (pc_reg + br_offs) :
                                                    /*inst_jirl*/ (rj_value + jirl_offs);
     assign br_offs = need_si26 ? {{ 4{i26[25]}}, i26[25:0], 2'b0} :
                              {{14{i16[15]}}, i16[15:0], 2'b0} ;
@@ -296,9 +330,15 @@ module ID(
     wire dst_is_r1;
     assign dst_is_r1  = inst_bl;
     assign dest = dst_is_r1 ? 5'd1 : rd;
-    assign reg_en = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b;
-    assign mem_en = inst_st_w ? 2'b11 :
-                    inst_ld_w ? 2'b01 : 2'b00;
+    assign reg_en = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_st_b & ~inst_st_h;
+    assign mem_en = {5{inst_st_w}}  & 5'b10011 |
+                    {5{inst_st_b}}  & 5'b10001 |
+                    {5{inst_st_h}}  & 5'b10010 |
+                    {5{inst_ld_w}}  & 5'b11011 |
+                    {5{inst_ld_b}}  & 5'b11001 |
+                    {5{inst_ld_h}}  & 5'b11010 |
+                    {5{inst_ld_bu}} & 5'b11101 |
+                    {5{inst_ld_hu}} & 5'b11110 ;
     assign src1 = src1_is_pc ? pc_reg : rj_value;
     assign src2 = src2_is_imm ? imm : rkd_value;
     assign rdata1_to_exe = rj_value;
@@ -311,7 +351,7 @@ module ID(
     assign have_rk = inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_nor | inst_and | inst_or | inst_xor | inst_mul_w | inst_mulh_w | inst_mulh_wu
                   | inst_div_w | inst_mod_w | inst_div_wu | inst_mod_wu | inst_sll_w | inst_srl_w | inst_sra_w;
     wire   have_rd;
-    assign have_rd = inst_st_w | inst_beq | inst_bne;
+    assign have_rd = inst_st_w | inst_beq | inst_bne | inst_blt | inst_bge | inst_bltu | inst_bgeu | inst_st_b | inst_st_h;
     wire   conflict_rj;
     wire   conflict_rk;
     wire   conflict_rd;

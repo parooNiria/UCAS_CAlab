@@ -1,0 +1,361 @@
+From a12ffa8c21f122f1305a7eb79c2a7a6484b712c8 Mon Sep 17 00:00:00 2001
+From: parooNiria <paroniria2025@163.com>
+Date: Thu, 23 Oct 2025 15:26:47 +0800
+Subject: [PATCH] exp11 finished commit
+
+---
+ exp11/myCPU/EXE.v       | 47 +++++++++++++++++++++++-------
+ exp11/myCPU/ID.v        | 64 +++++++++++++++++++++++++++++++++--------
+ exp11/myCPU/MEM.v       | 43 ++++++++++++++++++++++++---
+ exp11/myCPU/mycpu_top.v |  8 +++---
+ 4 files changed, 132 insertions(+), 30 deletions(-)
+
+diff --git a/exp11/myCPU/EXE.v b/exp11/myCPU/EXE.v
+index 76ee42c..052ffa5 100644
+--- a/exp11/myCPU/EXE.v
++++ b/exp11/myCPU/EXE.v
+@@ -11,7 +11,7 @@ module EXE(
+     input [18:0]    alu_op_from_id,
+     input [4:0]     dest_from_id,
+     input           reg_en_from_id,
+-    input [1:0]     mem_en_from_id,
++    input [4:0]     mem_en_from_id,
+     input           div_en_from_id,
+     input [31:0]    rdata2_from_id,
+     input [31:0]    rdata1_from_id,
+@@ -22,7 +22,7 @@ module EXE(
+     output [31:0]   pc_exe,
+     output [31:0]   alu_result,
+     output          reg_en,
+-    output          mem_ld,
++    output [4:0]    mem_ld_message,
+     output [4:0]    dest,
+     //to dram
+     output wire        data_sram_en,
+@@ -155,7 +155,7 @@ module EXE(
+     reg [18:0] alu_op_reg;
+     reg [4:0]  dest_reg;
+     reg        reg_en_reg;
+-    reg [1:0]  mem_en_reg;
++    reg [4:0]  mem_en_reg;
+     reg        div_en_reg;
+     always @(posedge clk) begin
+         if (reset) begin
+@@ -166,7 +166,7 @@ module EXE(
+             alu_op_reg <= 12'b0;
+             dest_reg   <= 5'b0;
+             reg_en_reg <= 1'b0;
+-            mem_en_reg <= 2'b0;
++            mem_en_reg <= 5'b0;
+             rdata2_reg <= 32'b0;
+             rdata1_reg <= 32'b0;
+             div_en_reg <= 1'b0;
+@@ -192,11 +192,38 @@ module EXE(
+     assign ready_go   = valid&((!div_en_reg) | (current_state==3'b100&&div_result_ready));
+     assign inst_exe   = inst_reg;
+     assign pc_exe     = pc_reg;
+-    assign data_sram_en    = valid;
+-    assign data_sram_we    = (mem_en_reg==2'b11 ? 4'b1111:0)&{4{valid}};
+-    assign data_sram_addr  = alu_result;
+-    assign data_sram_wdata = rdata2_reg;
+-    assign mem_ld     = (mem_en_reg==2'b01);
+     assign forward_data_exe = alu_result_without_div_mul;
+-    assign forward_en_exe = (mem_en_reg!=2'b01)&&(div_en_reg==1'b0)&&(mul_type==1'b0);
++    assign forward_en_exe = (~mem_ld)&&(div_en_reg==1'b0)&&(mul_type==1'b0);
++//mem deal part
++    wire   mem_type;
++    wire   mem_st;
++    wire   mem_ld;
++    wire   mem_b;
++    wire   mem_h;
++    wire   mem_bu;
++    wire   mem_hu;
++    wire   mem_w;
++    assign mem_type = mem_en_reg[4];
++    assign mem_ld = mem_type & mem_en_reg[3];
++    assign mem_st = mem_type & ~mem_en_reg[3];
++    assign mem_b  = mem_type & mem_en_reg[1:0]==2'b01 & ~mem_en_reg[2];
++    assign mem_h  = mem_type & mem_en_reg[1:0]==2'b10 & ~mem_en_reg[2];
++    assign mem_bu = mem_type & mem_en_reg[1:0]==2'b01 & mem_en_reg[2];
++    assign mem_hu = mem_type & mem_en_reg[1:0]==2'b10 & mem_en_reg[2];
++    assign mem_w  = mem_type & mem_en_reg[1:0]==2'b11;
++    assign mem_ld_message = {5{mem_ld}}&{mem_w,mem_h,mem_b,mem_hu,mem_bu};
++    wire   [3:0]wen_half;
++    assign wen_half = {4{alu_result[1]}}&4'b1100 | {4{~alu_result[1]}}&4'b0011;
++    wire   [3:0]wen_b;
++    assign wen_b = 4'b0001 << alu_result[1:0];
++    assign data_sram_en    = valid;
++    assign data_sram_we    = (mem_w?4'b1111:
++                              mem_h?wen_half:
++                              mem_b?wen_b:4'b0000
++                            )&{4{valid}}&{4{mem_st}};
++    assign data_sram_addr  = {alu_result[31:2],2'b00};
++    assign data_sram_wdata = mem_b ? {4{rdata2_reg[7:0]}} :
++                             mem_h ? {2{rdata2_reg[15:0]}} :
++                            rdata2_reg;
++
+ endmodule
+\ No newline at end of file
+diff --git a/exp11/myCPU/ID.v b/exp11/myCPU/ID.v
+index 657c8b5..64bde0e 100644
+--- a/exp11/myCPU/ID.v
++++ b/exp11/myCPU/ID.v
+@@ -18,7 +18,7 @@ module ID(
+     output [31:0]   src1,
+     output [31:0]   src2,
+     output          reg_en,
+-    output [1:0]    mem_en,
++    output [4:0]    mem_en,
+     output          div_en, 
+     output [31:0]   rdata1_to_exe,//spare for inst store 
+     output [31:0]   rdata2_to_exe, //not used now,spare for future
+@@ -92,6 +92,16 @@ module ID(
+     wire        inst_mod_w;
+     wire        inst_div_wu;
+     wire        inst_mod_wu;
++    wire        inst_blt;
++    wire        inst_bge;
++    wire        inst_bltu;
++    wire        inst_bgeu;
++    wire        inst_ld_b;
++    wire        inst_ld_h;
++    wire        inst_ld_bu;
++    wire        inst_ld_hu;
++    wire        inst_st_b;
++    wire        inst_st_h;
+ 
+     wire        need_ui5;
+     wire        need_si12;
+@@ -182,10 +192,20 @@ module ID(
+     assign inst_mod_w  = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h1];
+     assign inst_div_wu = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h2];
+     assign inst_mod_wu = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h3];
++    assign inst_blt    = op_31_26_d[6'h18];
++    assign inst_bge    = op_31_26_d[6'h19];
++    assign inst_bltu   = op_31_26_d[6'h1a];
++    assign inst_bgeu   = op_31_26_d[6'h1b];
++    assign inst_ld_b   = op_31_26_d[6'h0a] & op_25_22_d[4'h0];
++    assign inst_ld_h   = op_31_26_d[6'h0a] & op_25_22_d[4'h1];
++    assign inst_st_b   = op_31_26_d[6'h0a] & op_25_22_d[4'h4];
++    assign inst_st_h   = op_31_26_d[6'h0a] & op_25_22_d[4'h5];
++    assign inst_ld_bu  = op_31_26_d[6'h0a] & op_25_22_d[4'h8];
++    assign inst_ld_hu  = op_31_26_d[6'h0a] & op_25_22_d[4'h9];
+     wire [18:0] alu_op;
+     assign alu_op_id = alu_op;
+     assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_w | inst_st_w
+-                    | inst_jirl | inst_bl | inst_pcaddu12i;
++                    | inst_jirl | inst_bl | inst_pcaddu12i | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_st_b | inst_st_h;
+     assign alu_op[ 1] = inst_sub_w;
+     assign alu_op[ 2] = inst_slt|inst_slti;
+     assign alu_op[ 3] = inst_sltu|inst_sltiu;
+@@ -207,7 +227,7 @@ module ID(
+     assign div_en = (inst_div_w | inst_mod_w | inst_div_wu | inst_mod_wu);
+     //to regfile 
+     wire src_reg_is_rd;
+-    assign src_reg_is_rd = inst_beq | inst_bne | inst_st_w;
++    assign src_reg_is_rd = inst_beq | inst_bne | inst_st_w | inst_blt | inst_bge | inst_bltu | inst_bgeu | inst_st_b | inst_st_h;
+     assign raddr1 = rj;
+     assign raddr2 = src_reg_is_rd ? rd : rk;
+ 
+@@ -229,13 +249,19 @@ module ID(
+                             inst_andi   |
+                             inst_ori    |
+                             inst_xori   |
+-                            inst_pcaddu12i;
++                            inst_pcaddu12i|
++                            inst_st_b   |
++                            inst_st_h   |
++                            inst_ld_b   |
++                            inst_ld_h   |
++                            inst_ld_bu  |
++                            inst_ld_hu  ;
+ 
+-    //aboat imm
++    //about imm
+     assign need_ui5   =  inst_slli_w | inst_srli_w | inst_srai_w;
+-    assign need_si12  =  inst_addi_w | inst_ld_w | inst_st_w| inst_slti | inst_sltiu ;
++    assign need_si12  =  inst_addi_w | inst_ld_w | inst_st_w| inst_slti | inst_sltiu | inst_st_b | inst_st_h | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu;
+     assign need_si12_unsigned  = inst_andi | inst_ori | inst_xori ; 
+-    assign need_si16  =  inst_jirl | inst_beq | inst_bne;
++    assign need_si16  =  inst_jirl | inst_beq | inst_bne | inst_blt | inst_bge | inst_bltu | inst_bgeu;
+     assign need_si20  =  inst_lu12i_w | inst_pcaddu12i;
+     assign need_si26  =  inst_b | inst_bl;
+     assign src2_is_4  =  inst_jirl | inst_bl;
+@@ -251,6 +277,8 @@ module ID(
+     wire [31:0]     rk_value;
+     wire [31:0]     rkd_value;
+     wire            rj_eq_rd;
++    wire            rj_less_rd_signed;
++    wire            rj_less_rd_unsigned;
+     assign rj_value  =  (compare_rj_exe & forward_en_from_exe) ? forward_data_from_exe :
+                         (compare_rj_mem) ? forward_data_from_mem :
+                         (compare_rj_wb)  ? forward_data_from_wb  :
+@@ -265,8 +293,14 @@ module ID(
+                                             rdata2;
+     assign rkd_value = src_reg_is_rd ? rd_value : rk_value; 
+     assign rj_eq_rd = (rj_value == rd_value);
++    assign rj_less_rd_signed = ($signed(rj_value) < $signed(rd_value));
++    assign rj_less_rd_unsigned = (rj_value < rd_value);
+     assign br_taken = (   inst_beq  &&  rj_eq_rd
+                     || inst_bne  && !rj_eq_rd
++                    || inst_blt  &&  rj_less_rd_signed
++                    || inst_bge  && !rj_less_rd_signed
++                    || inst_bltu &&  rj_less_rd_unsigned
++                    || inst_bgeu && !rj_less_rd_unsigned
+                     || inst_jirl
+                     || inst_bl
+                     || inst_b
+@@ -275,7 +309,7 @@ module ID(
+     wire [31:0] br_offs;
+     wire [31:0] jirl_offs;
+     assign flush = valid&~conflict&br_taken;
+-    assign newpc = (inst_beq || inst_bne || inst_bl || inst_b) ? (pc_reg + br_offs) :
++    assign newpc = (inst_beq || inst_bne || inst_bl || inst_b || inst_blt || inst_bge || inst_bltu || inst_bgeu) ? (pc_reg + br_offs) :
+                                                    /*inst_jirl*/ (rj_value + jirl_offs);
+     assign br_offs = need_si26 ? {{ 4{i26[25]}}, i26[25:0], 2'b0} :
+                              {{14{i16[15]}}, i16[15:0], 2'b0} ;
+@@ -296,9 +330,15 @@ module ID(
+     wire dst_is_r1;
+     assign dst_is_r1  = inst_bl;
+     assign dest = dst_is_r1 ? 5'd1 : rd;
+-    assign reg_en = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b;
+-    assign mem_en = inst_st_w ? 2'b11 :
+-                    inst_ld_w ? 2'b01 : 2'b00;
++    assign reg_en = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_st_b & ~inst_st_h;
++    assign mem_en = {5{inst_st_w}}  & 5'b10011 |
++                    {5{inst_st_b}}  & 5'b10001 |
++                    {5{inst_st_h}}  & 5'b10010 |
++                    {5{inst_ld_w}}  & 5'b11011 |
++                    {5{inst_ld_b}}  & 5'b11001 |
++                    {5{inst_ld_h}}  & 5'b11010 |
++                    {5{inst_ld_bu}} & 5'b11101 |
++                    {5{inst_ld_hu}} & 5'b11110 ;
+     assign src1 = src1_is_pc ? pc_reg : rj_value;
+     assign src2 = src2_is_imm ? imm : rkd_value;
+     assign rdata1_to_exe = rj_value;
+@@ -311,7 +351,7 @@ module ID(
+     assign have_rk = inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_nor | inst_and | inst_or | inst_xor | inst_mul_w | inst_mulh_w | inst_mulh_wu
+                   | inst_div_w | inst_mod_w | inst_div_wu | inst_mod_wu | inst_sll_w | inst_srl_w | inst_sra_w;
+     wire   have_rd;
+-    assign have_rd = inst_st_w | inst_beq | inst_bne;
++    assign have_rd = inst_st_w | inst_beq | inst_bne | inst_blt | inst_bge | inst_bltu | inst_bgeu | inst_st_b | inst_st_h;
+     wire   conflict_rj;
+     wire   conflict_rk;
+     wire   conflict_rd;
+diff --git a/exp11/myCPU/MEM.v b/exp11/myCPU/MEM.v
+index c266abc..d9364e5 100644
+--- a/exp11/myCPU/MEM.v
++++ b/exp11/myCPU/MEM.v
+@@ -7,7 +7,7 @@ module MEM(
+     input [31:0]    inst_from_exe,
+     input [31:0]    pc_from_exe,
+     input           reg_en_from_exe,
+-    input           mem_ld_from_exe,
++    input [4:0]     mem_ld_from_exe,
+     input [4:0]     dest_from_exe,
+     input [31:0]    alu_result_from_exe,
+     //to WB
+@@ -41,7 +41,7 @@ module MEM(
+     reg [31:0] inst_reg;
+     reg [31:0] pc_reg;
+     reg        reg_en_reg;
+-    reg        mem_ld_reg;
++    reg [4:0]  mem_ld_reg;
+     reg [4:0]  dest_reg;
+     reg [31:0] alu_result_reg;
+     always @(posedge clk) begin
+@@ -49,7 +49,7 @@ module MEM(
+             inst_reg       <= 32'b0;
+             pc_reg         <= 32'b0;
+             reg_en_reg     <= 1'b0;
+-            mem_ld_reg     <= 1'b0;
++            mem_ld_reg     <= 5'b0;
+             dest_reg       <= 5'b0;
+             alu_result_reg <= 32'b0;
+         end
+@@ -68,6 +68,41 @@ module MEM(
+     assign ready_go   = valid;
+     assign inst_mem   = inst_reg;
+     assign pc_mem     = pc_reg;
+-    assign data_to_reg= mem_ld_reg ? data_sram_rdata : alu_result_reg;
++    assign data_to_reg= ld_inst ? sram_rdata : alu_result_reg;
+     assign forward_data_mem = data_to_reg;
++
++    wire   ld_inst;
++    assign ld_inst = mem_ld_reg != 5'b0;
++    wire   ld_b;
++    wire   ld_h;
++    wire   ld_bu;
++    wire   ld_hu;
++    wire   ld_w;
++    assign ld_bu = mem_ld_reg[0];
++    assign ld_hu = mem_ld_reg[1];
++    assign ld_b  = mem_ld_reg[2];
++    assign ld_h  = mem_ld_reg[3];
++    assign ld_w  = mem_ld_reg[4];
++    wire [31:0] sram_rdata;
++    wire [31:0] data_hu;
++    assign data_hu = alu_result_reg[1] ? {16'b0, data_sram_rdata[31:16]} : {16'b0, data_sram_rdata[15:0]};
++    wire [31:0] data_bu;
++    assign data_bu = alu_result_reg[1:0]==2'b11 ? {24'b0, data_sram_rdata[31:24]} :
++                     alu_result_reg[1:0]==2'b10 ? {24'b0, data_sram_rdata[23:16]} :
++                     alu_result_reg[1:0]==2'b01 ? {24'b0, data_sram_rdata[15:8]}  :
++                                                   {24'b0, data_sram_rdata[7:0]} ;  
++    wire [31:0] data_h;
++    assign data_h = alu_result_reg[1] ?{{16{data_sram_rdata[31]}},data_sram_rdata[31:16]} :
++                                        {{16{data_sram_rdata[15]}},data_sram_rdata[15:0]} ;
++    wire [31:0] data_b;
++    assign data_b = alu_result_reg[1:0]==2'b11 ? {{24{data_sram_rdata[31]}},data_sram_rdata[31:24]} :
++                    alu_result_reg[1:0]==2'b10 ? {{24{data_sram_rdata[23]}},data_sram_rdata[23:16]} :
++                    alu_result_reg[1:0]==2'b01 ? {{24{data_sram_rdata[15]}},data_sram_rdata[15:8]}  :
++                                                 {{24{data_sram_rdata[7]}}, data_sram_rdata[7:0]} ;
++    assign sram_rdata = ld_w ? data_sram_rdata :
++                        ld_hu  ? data_hu :
++                        ld_bu  ? data_bu :
++                        ld_h   ? data_h :
++                        ld_b   ? data_b :
++                                  32'b0;
+ endmodule
+diff --git a/exp11/myCPU/mycpu_top.v b/exp11/myCPU/mycpu_top.v
+index 7550eb0..ceafc60 100644
+--- a/exp11/myCPU/mycpu_top.v
++++ b/exp11/myCPU/mycpu_top.v
+@@ -55,7 +55,7 @@ wire [31:0] src2_to_exe;
+ wire [18:0] alu_op_to_exe;
+ wire [4:0]  dest_to_exe;
+ wire        reg_en_to_exe;
+-wire [1:0]  mem_en_to_exe;
++wire [4:0]  mem_en_to_exe;
+ wire [31:0] rdata1;
+ wire [31:0] rdata2;
+ wire [4:0]  raddr1;
+@@ -112,7 +112,7 @@ wire [31:0] inst_exe;
+ wire [31:0] pc_exe;
+ wire [31:0] alu_result_exe;
+ wire        reg_en_to_mem;
+-wire        mem_ld_exe;
++wire [4:0]  mem_ld_message;
+ wire [4:0]  dest_to_mem;
+ wire        exe_valid;
+ wire        ex_reg_en_valid;
+@@ -143,7 +143,7 @@ EXE EXE_PART(
+     .pc_exe         (pc_exe        ),
+     .alu_result     (alu_result_exe),
+     .reg_en        (reg_en_to_mem ),
+-    .mem_ld         (mem_ld_exe    ),
++    .mem_ld_message         (mem_ld_message   ),
+     .dest           (dest_to_mem   ),
+     //to dram
+     .data_sram_en   (data_sram_en  ),
+@@ -177,7 +177,7 @@ MEM MEM_PART(
+     .inst_from_exe (inst_exe       ),
+     .pc_from_exe   (pc_exe         ),
+     .reg_en_from_exe(reg_en_to_mem ),
+-    .mem_ld_from_exe(mem_ld_exe    ),
++    .mem_ld_from_exe(mem_ld_message),
+     .dest_from_exe (dest_to_mem    ),
+     .alu_result_from_exe(alu_result_exe),
+     //to WB
+-- 
+2.44.0.windows.1
+

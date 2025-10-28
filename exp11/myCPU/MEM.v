@@ -23,7 +23,8 @@ module MEM(
     //valid
     output  reg       valid,
     //bypass
-    output [31:0] forward_data_mem
+    output [31:0] forward_data_mem,
+    output        forward_en_mem
 );  
     //valid Part
     always @(posedge clk) begin
@@ -69,8 +70,8 @@ module MEM(
     assign inst_mem   = inst_reg;
     assign pc_mem     = pc_reg;
     assign data_to_reg= ld_inst ? sram_rdata : alu_result_reg;
-    assign forward_data_mem = data_to_reg;
-
+    assign forward_data_mem = alu_result_reg;
+    assign forward_en_mem   = ~ld_inst;
     wire   ld_inst;
     assign ld_inst = mem_ld_reg != 5'b0;
     wire   ld_b;

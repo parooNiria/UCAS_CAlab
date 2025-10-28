@@ -38,7 +38,8 @@ module ID(
     input [31:0]   forward_data_from_exe,
     input [31:0]   forward_data_from_mem,
     input [31:0]   forward_data_from_wb,
-    input          forward_en_from_exe
+    input          forward_en_from_exe,
+    input          forward_en_from_mem
 );
 
     wire [63:0] op_31_26_d;
@@ -280,15 +281,15 @@ module ID(
     wire            rj_less_rd_signed;
     wire            rj_less_rd_unsigned;
     assign rj_value  =  (compare_rj_exe & forward_en_from_exe) ? forward_data_from_exe :
-                        (compare_rj_mem) ? forward_data_from_mem :
+                        (compare_rj_mem  & forward_en_from_mem) ? forward_data_from_mem :
                         (compare_rj_wb)  ? forward_data_from_wb  :
                         rdata1;;
-    assign rd_value =   (compare_rd_exe) ? forward_data_from_exe :
-                        (compare_rd_mem) ? forward_data_from_mem :
+    assign rd_value =   (compare_rd_exe & forward_en_from_exe) ? forward_data_from_exe :
+                        (compare_rd_mem  & forward_en_from_mem) ? forward_data_from_mem :
                         (compare_rd_wb)  ? forward_data_from_wb  :
                                         rdata2;
     assign rk_value =   (compare_rk_exe & forward_en_from_exe  ) ? forward_data_from_exe :
-                        (compare_rk_mem) ? forward_data_from_mem :
+                        (compare_rk_mem  & forward_en_from_mem) ? forward_data_from_mem :
                         (compare_rk_wb)  ? forward_data_from_wb  :
                                             rdata2;
     assign rkd_value = src_reg_is_rd ? rd_value : rk_value; 
@@ -373,9 +374,9 @@ module ID(
     assign compare_rd_exe = (rd == ex_dest) & ex_reg_en_valid & (rd != 5'b0);
     assign compare_rd_mem = (rd == mem_dest) & mem_reg_en_valid & (rd != 5'b0);
     assign compare_rd_wb  = (rd == wb_dest)  & wb_reg_en_valid & (rd != 5'b0);
-    assign conflict_rj = compare_rj_exe &~forward_en_from_exe & ~no_rj;
-    assign conflict_rk = compare_rk_exe &~forward_en_from_exe & have_rk;
-    assign conflict_rd = compare_rd_exe &~forward_en_from_exe & have_rd;
+    assign conflict_rj = ((compare_rj_exe &~forward_en_from_exe )|(compare_rj_mem & ~forward_en_from_mem))& ~no_rj;
+    assign conflict_rk = ((compare_rk_exe &~forward_en_from_exe)|(compare_rk_mem & ~forward_en_from_mem)) & have_rk;
+    assign conflict_rd = ((compare_rd_exe &~forward_en_from_exe)|(compare_rd_mem & ~forward_en_from_mem)) & have_rd;
     wire   conflict;
     assign conflict = conflict_rj | conflict_rk | conflict_rd;
 

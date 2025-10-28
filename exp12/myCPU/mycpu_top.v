@@ -103,7 +103,8 @@ ID ID_PART(
     .forward_data_from_exe(forward_data_exe),
     .forward_data_from_mem(forward_data_mem),
     .forward_data_from_wb(forward_data_wb),
-    .forward_en_from_exe(forward_en_from_exe)
+    .forward_en_from_exe(forward_en_from_exe),
+    .forward_en_from_mem(forward_en_mem)
 );
 
 wire        allow_in_exe;
@@ -168,6 +169,7 @@ wire        MEM_valid;
 wire        mem_reg_en_valid;
 assign mem_reg_en_valid = MEM_valid & reg_en_to_wb;
 wire [31:0] forward_data_mem;
+wire forward_en_mem;
 MEM MEM_PART(
     .clk            (clk            ),
     .reset          (reset          ),
@@ -193,7 +195,8 @@ MEM MEM_PART(
     //valid
     .valid         (MEM_valid     ),
     //bypass
-    .forward_data_mem(forward_data_mem)
+    .forward_data_mem(forward_data_mem),
+    .forward_en_mem(forward_en_mem)
 );
 
 wire allow_in_wb;

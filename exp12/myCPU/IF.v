@@ -15,7 +15,12 @@ module IF(
     output [31:0] pc_if          ,
 
     input         flush          ,
-    input  [31:0] newpc               
+    input  [31:0] newpc          ,
+
+    input         ertn_flush,
+    input         wb_ex,
+    input  [31:0] ex_entry,
+    input  [31:0] ertn_entry 
 );  
     wire       handshake;
     assign handshake = ready_go & allow_in;
@@ -59,7 +64,7 @@ module IF(
     wire [31:0] nextpc;
     reg  keep;
     wire pc_update;
-    assign pc_update = (ready_go & allow_in)|flush|before_first_inst;
+    assign pc_update = (ready_go & allow_in)|flush|before_first_inst|wb_ex|ertn_flush;
     always @(posedge clk) begin
         if (reset) begin
             pc <= 32'h1bfffffc;     //trick: to make nextpc be 0x1c000000 during reset
@@ -98,10 +103,14 @@ module IF(
     assign inst_sram_wen   = 4'b0;
     assign inst_sram_addr  = nextpc;
     assign inst_sram_wdata = 32'b0;
-    assign nextpc = flush ? newpc : seq_pc;
+
+    assign nextpc = wb_ex ? ex_entry :
+                    ertn_flush ? ertn_entry :
+                    flush ? newpc :
+                    seq_pc;
 
 //if_id
-    assign ready_go = ~flush&valid;
+    assign ready_go = ~flush&valid&~wb_ex&~ertn_flush;
     assign inst_if   = ~keep ? inst_keep : inst_sram_rdata;
     assign pc_if     = pc;
 

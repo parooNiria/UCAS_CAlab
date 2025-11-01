@@ -33,10 +33,19 @@ module EXE(
     output reg       valid,
     //bypass
     output [31:0] forward_data_exe,
-    output        forward_en_exe
+    output        forward_en_exe,
+    //exception related
+    input  [82:0] exception_message_from_id,
+    output [82:0] exception_message_to_mem,
+    input         ertn_flush,
+    input         wb_ex,
+    input  [1:0]  exception_message_from_mem
 );
     always @(posedge clk) begin
         if (reset) begin
+            valid <= 1'b0;
+        end
+        else if (wb_ex || ertn_flush) begin
             valid <= 1'b0;
         end
         else if (ready_go_id &allow_in) begin
@@ -157,6 +166,7 @@ module EXE(
     reg        reg_en_reg;
     reg [4:0]  mem_en_reg;
     reg        div_en_reg;
+    reg [82:0] exception_message_reg;
     always @(posedge clk) begin
         if (reset) begin
             inst_reg   <= 32'b0;
@@ -170,6 +180,7 @@ module EXE(
             rdata2_reg <= 32'b0;
             rdata1_reg <= 32'b0;
             div_en_reg <= 1'b0;
+            exception_message_reg <= 83'b0;
         end
         else if (ready_go_id &allow_in) begin
             inst_reg   <= inst_from_id;
@@ -183,6 +194,7 @@ module EXE(
             rdata2_reg <= rdata2_from_id;
             rdata1_reg <= rdata1_from_id;
             div_en_reg <= div_en_from_id;
+            exception_message_reg <= exception_message_from_id;
         end
     end
     wire mul_type;
@@ -193,7 +205,7 @@ module EXE(
     assign inst_exe   = inst_reg;
     assign pc_exe     = pc_reg;
     assign forward_data_exe = alu_result_without_div_mul;
-    assign forward_en_exe = (~mem_ld)&&(div_en_reg==1'b0)&&(mul_type==1'b0);
+    assign forward_en_exe = (~mem_ld)&&(div_en_reg==1'b0)&&(mul_type==1'b0)&&(~csr_we);
 //mem deal part
     wire   mem_type;
     wire   mem_st;
@@ -220,10 +232,26 @@ module EXE(
     assign data_sram_we    = (mem_w?4'b1111:
                               mem_h?wen_half:
                               mem_b?wen_b:4'b0000
-                            )&{4{valid}}&{4{mem_st}};
+                            )&{4{valid}}&{4{mem_st}}&{4{~ex_stall_mem_store}};
     assign data_sram_addr  = {alu_result[31:2],2'b00};
     assign data_sram_wdata = mem_b ? {4{rdata2_reg[7:0]}} :
                              mem_h ? {2{rdata2_reg[15:0]}} :
                             rdata2_reg;
+//exception related
+    wire csr_we;
+    assign csr_we = exception_message_reg[78];
 
+    wire exception_state_exe;
+    assign exception_state_exe = exception_message_reg[82];
+    assign exception_message_to_mem = exception_message_reg;
+
+    wire exception_state_mem;
+    wire ertn_mem;
+    assign exception_state_mem = exception_message_from_mem[0];
+    assign ertn_mem = exception_message_from_mem[1];
+
+    wire ex_stall_mem_store;
+    assign ex_stall_mem_store = exception_state_exe
+                                |wb_ex | ertn_flush
+                                |exception_state_mem | ertn_mem;
 endmodule

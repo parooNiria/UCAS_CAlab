@@ -24,11 +24,20 @@ module MEM(
     output  reg       valid,
     //bypass
     output [31:0] forward_data_mem,
-    output        forward_en_mem
+    output        forward_en_mem,
+    //exception related
+    input  [82:0] exception_message_from_exe,
+    output [82:0] exception_message_to_wb,
+    input         ertn_flush,
+    input         wb_ex,
+    output  [1:0] exception_message_to_exe
 );  
     //valid Part
     always @(posedge clk) begin
         if (reset) begin
+            valid <= 1'b0;
+        end
+        else if(wb_ex || ertn_flush) begin
             valid <= 1'b0;
         end
         else if (ready_go_exe &allow_in) begin
@@ -45,6 +54,7 @@ module MEM(
     reg [4:0]  mem_ld_reg;
     reg [4:0]  dest_reg;
     reg [31:0] alu_result_reg;
+    reg [82:0] exception_message_reg;
     always @(posedge clk) begin
         if (reset) begin
             inst_reg       <= 32'b0;
@@ -53,6 +63,7 @@ module MEM(
             mem_ld_reg     <= 5'b0;
             dest_reg       <= 5'b0;
             alu_result_reg <= 32'b0;
+            exception_message_reg <= 83'b0;
         end
         else if (ready_go_exe &allow_in) begin
             inst_reg       <= inst_from_exe;
@@ -61,6 +72,7 @@ module MEM(
             mem_ld_reg     <= mem_ld_from_exe;
             dest_reg       <= dest_from_exe;
             alu_result_reg <= alu_result_from_exe;
+            exception_message_reg <= exception_message_from_exe;
         end
     end
     assign reg_en     = reg_en_reg;
@@ -71,7 +83,7 @@ module MEM(
     assign pc_mem     = pc_reg;
     assign data_to_reg= ld_inst ? sram_rdata : alu_result_reg;
     assign forward_data_mem = alu_result_reg;
-    assign forward_en_mem   = ~ld_inst;
+    assign forward_en_mem   = ~ld_inst & ~csr_we;
     wire   ld_inst;
     assign ld_inst = mem_ld_reg != 5'b0;
     wire   ld_b;
@@ -106,4 +118,16 @@ module MEM(
                         ld_h   ? data_h :
                         ld_b   ? data_b :
                                   32'b0;
+
+//exception related signals
+    wire exception_state;
+    assign exception_state = exception_message_reg[82];
+
+    wire csr_we;
+    assign csr_we = exception_message_reg[78];
+    assign exception_message_to_wb = exception_message_reg;
+
+    wire inst_ertn;
+    assign inst_ertn = exception_message_reg[81];
+    assign exception_message_to_exe = {inst_ertn, exception_state};
 endmodule

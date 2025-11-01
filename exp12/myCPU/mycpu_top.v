@@ -42,7 +42,11 @@ IF IF_PART(
     .allow_in       (allow_in_id  ),
 
     .flush          (flush         ),
-    .newpc          (newpc    )               
+    .newpc          (newpc          ),
+    .ertn_flush     (ertn_flush     ),
+    .wb_ex          (wb_ex          ),
+    .ex_entry       (ex_entry       ),
+    .ertn_entry     (ertn_entry     )
 );
 
 wire        allow_in_id;
@@ -104,7 +108,11 @@ ID ID_PART(
     .forward_data_from_mem(forward_data_mem),
     .forward_data_from_wb(forward_data_wb),
     .forward_en_from_exe(forward_en_from_exe),
-    .forward_en_from_mem(forward_en_mem)
+    .forward_en_from_mem(forward_en_mem),
+    //exception related
+    .exception_message(exception_message_from_id),
+    .ertn_flush     (ertn_flush     ),
+    .wb_ex          (wb_ex          )
 );
 
 wire        allow_in_exe;
@@ -120,6 +128,7 @@ wire        ex_reg_en_valid;
 assign      ex_reg_en_valid = exe_valid & reg_en_to_mem;
 wire [31:0] forward_data_exe;
 wire        forward_en_from_exe;
+wire [82:0] exception_message_from_id;
 EXE EXE_PART(
     .clk            (clk            ),
     .reset          (reset          ),
@@ -155,7 +164,13 @@ EXE EXE_PART(
     .valid         (exe_valid     ),
     //bypass
     .forward_data_exe(forward_data_exe),
-    .forward_en_exe(forward_en_from_exe)
+    .forward_en_exe(forward_en_from_exe),
+    //exception related
+    .exception_message_from_id(exception_message_from_id),
+    .exception_message_to_mem(exception_message_to_mem),
+    .ertn_flush     (ertn_flush     ),
+    .wb_ex          (wb_ex          ),
+    .exception_message_from_mem(exception_message_from_mem)
 );
 
 wire ready_go_mem;
@@ -170,6 +185,8 @@ wire        mem_reg_en_valid;
 assign mem_reg_en_valid = MEM_valid & reg_en_to_wb;
 wire [31:0] forward_data_mem;
 wire forward_en_mem;
+wire [82:0] exception_message_to_mem;
+wire [1:0] exception_message_from_mem; 
 MEM MEM_PART(
     .clk            (clk            ),
     .reset          (reset          ),
@@ -196,7 +213,14 @@ MEM MEM_PART(
     .valid         (MEM_valid     ),
     //bypass
     .forward_data_mem(forward_data_mem),
-    .forward_en_mem(forward_en_mem)
+    .forward_en_mem(forward_en_mem),
+
+    //exception related
+    .exception_message_from_exe(exception_message_to_mem),
+    .exception_message_to_wb(exception_message_to_wb),
+    .ertn_flush     (ertn_flush     ),
+    .wb_ex          (wb_ex          ),
+    .exception_message_to_exe(exception_message_from_mem)
 );
 
 wire allow_in_wb;
@@ -209,6 +233,7 @@ wire        WB_valid;
 wire        wb_reg_en_valid;
 assign wb_reg_en_valid = WB_valid & rf_we;
 wire [31:0] forward_data_wb;
+wire [82:0] exception_message_to_wb;
 WB WB_PART(
     .clk            (clk            ),
     .reset          (reset          ),
@@ -229,7 +254,20 @@ WB WB_PART(
     .pc             (pc             ),
     .valid         (WB_valid      ),
     //bypass
-    .forward_data_wb(forward_data_wb)
+    .forward_data_wb(forward_data_wb),
+    //exception related
+    .ertn_flush     (ertn_flush     ),
+    .wb_ex          (wb_ex          ),
+    .csr_we         (csr_we         ),
+    .csr_num        (csr_num        ),
+    .csr_wdata      (csr_wdata      ),
+    .csr_wmask      (csr_wmask      ),
+    .csr_re         (csr_re         ),
+    .csr_rdata      (csr_rvalue     ),
+    .wb_ecode       (wb_ecode       ),
+    .wb_esubcode    (wb_esubcode    ),
+    .wb_pc          (wb_pc          ),
+    .exception_message_from_mem(exception_message_to_wb)
 );
 
 regfile regfile_PART(
@@ -248,4 +286,35 @@ assign debug_wb_rf_we   = {4{rf_we}};
 assign debug_wb_rf_wnum  = dest;
 assign debug_wb_rf_wdata = wdata;
 
+wire csr_re;
+wire [13:0] csr_num;
+wire [31:0] csr_rvalue;
+wire csr_we;
+wire [31:0] csr_wdata;
+wire [31:0] csr_wmask;
+wire wb_ex;
+wire ertn_flush;
+wire [31:0] wb_pc;
+wire [5:0] wb_ecode;
+wire [8:0] wb_esubcode;
+wire [31:0] ex_entry;
+wire [31:0] ertn_entry;
+
+csr csr_PART(
+    .clk        (clk        ),
+    .reset      (reset      ),
+    .csr_re     (csr_re     ),
+    .csr_num    (csr_num    ),
+    .csr_rvalue (csr_rvalue ),
+    .csr_we     (csr_we     ),
+    .csr_wdata  (csr_wdata  ),
+    .csr_wmask  (csr_wmask  ),
+    .wb_ex      (wb_ex      ),
+    .ertn_flush (ertn_flush ),
+    .wb_pc      (wb_pc      ),
+    .wb_ecode   (wb_ecode   ),
+    .wb_esubcode(wb_esubcode),
+    .ex_entry   (ex_entry   ),
+    .ertn_entry (ertn_entry )
+);
 endmodule

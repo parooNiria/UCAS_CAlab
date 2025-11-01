@@ -39,7 +39,11 @@ module ID(
     input [31:0]   forward_data_from_mem,
     input [31:0]   forward_data_from_wb,
     input          forward_en_from_exe,
-    input          forward_en_from_mem
+    input          forward_en_from_mem,
+    //exception related
+    output [82:0]  exception_message,
+    input          ertn_flush,
+    input          wb_ex
 );
 
     wire [63:0] op_31_26_d;
@@ -104,6 +108,13 @@ module ID(
     wire        inst_st_b;
     wire        inst_st_h;
 
+    //exception related
+    wire        inst_csrrd;
+    wire        inst_csrwr;
+    wire        inst_csrxchg;
+    wire        inst_ertn;
+    wire        inst_syscall;
+
     wire        need_ui5;
     wire        need_si12;
     wire        need_si16;
@@ -117,6 +128,9 @@ module ID(
     reg         valid;
     always@(posedge clk) begin
         if (reset) begin
+            valid <= 1'b0;
+        end
+        else if(wb_ex || ertn_flush) begin
             valid <= 1'b0;
         end
         else if (handshake_fd) begin
@@ -203,6 +217,11 @@ module ID(
     assign inst_st_h   = op_31_26_d[6'h0a] & op_25_22_d[4'h5];
     assign inst_ld_bu  = op_31_26_d[6'h0a] & op_25_22_d[4'h8];
     assign inst_ld_hu  = op_31_26_d[6'h0a] & op_25_22_d[4'h9];
+    assign inst_csrrd   = op_31_26_d[6'h1] & ~inst_reg[25] & ~inst_reg[24] & ~inst_reg[9] & ~inst_reg[8] & ~inst_reg[7] & ~inst_reg[6] & ~inst_reg[5];
+    assign inst_csrwr   = op_31_26_d[6'h1] & ~inst_reg[25] & ~inst_reg[24] & ~inst_reg[9] & ~inst_reg[8] & ~inst_reg[7] & ~inst_reg[6] & inst_reg[5];
+    assign inst_csrxchg = op_31_26_d[6'h1] & ~inst_reg[25] & ~inst_reg[24] & (rj != 5'b0 | rj != 5'b1);
+    assign inst_ertn    = op_31_26_d[6'h1] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & inst_reg[14:10] == 5'b01110 & inst_reg[9:0] == 10'b00000;
+    assign inst_syscall = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h16];
     wire [18:0] alu_op;
     assign alu_op_id = alu_op;
     assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_w | inst_st_w
@@ -228,7 +247,7 @@ module ID(
     assign div_en = (inst_div_w | inst_mod_w | inst_div_wu | inst_mod_wu);
     //to regfile 
     wire src_reg_is_rd;
-    assign src_reg_is_rd = inst_beq | inst_bne | inst_st_w | inst_blt | inst_bge | inst_bltu | inst_bgeu | inst_st_b | inst_st_h;
+    assign src_reg_is_rd = inst_beq | inst_bne | inst_st_w | inst_blt | inst_bge | inst_bltu | inst_bgeu | inst_st_b | inst_st_h | inst_csrwr | inst_csrxchg;
     assign raddr1 = rj;
     assign raddr2 = src_reg_is_rd ? rd : rk;
 
@@ -331,7 +350,7 @@ module ID(
     wire dst_is_r1;
     assign dst_is_r1  = inst_bl;
     assign dest = dst_is_r1 ? 5'd1 : rd;
-    assign reg_en = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_st_b & ~inst_st_h;
+    assign reg_en = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_st_b & ~inst_st_h & ~inst_ertn & ~inst_syscall;
     assign mem_en = {5{inst_st_w}}  & 5'b10011 |
                     {5{inst_st_b}}  & 5'b10001 |
                     {5{inst_st_h}}  & 5'b10010 |
@@ -347,12 +366,12 @@ module ID(
     
     //about conflict
     wire   no_rj;
-    assign no_rj = inst_b | inst_lu12i_w | inst_bl | inst_pcaddu12i;
+    assign no_rj = inst_b | inst_lu12i_w | inst_bl | inst_pcaddu12i | inst_ertn | inst_syscall | inst_csrrd | inst_csrwr;
     wire   have_rk;
     assign have_rk = inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_nor | inst_and | inst_or | inst_xor | inst_mul_w | inst_mulh_w | inst_mulh_wu
                   | inst_div_w | inst_mod_w | inst_div_wu | inst_mod_wu | inst_sll_w | inst_srl_w | inst_sra_w;
     wire   have_rd;
-    assign have_rd = inst_st_w | inst_beq | inst_bne | inst_blt | inst_bge | inst_bltu | inst_bgeu | inst_st_b | inst_st_h;
+    assign have_rd = inst_st_w | inst_beq | inst_bne | inst_blt | inst_bge | inst_bltu | inst_bgeu | inst_st_b | inst_st_h | inst_csrwr | inst_csrxchg;
     wire   conflict_rj;
     wire   conflict_rk;
     wire   conflict_rd;
@@ -380,6 +399,33 @@ module ID(
     wire   conflict;
     assign conflict = conflict_rj | conflict_rk | conflict_rd;
 
- 
+//exception related signals
+    wire   exception_state;
+    assign exception_state = valid&inst_syscall;
+
+    wire    csr_re;
+    assign  csr_re = inst_csrrd | inst_csrwr | inst_csrxchg;
+    wire    csr_we;
+    assign  csr_we = inst_csrwr | inst_csrxchg;
+    wire    [31:0] csr_wmask;
+    assign  csr_wmask = {32{inst_csrxchg}} & rj_value | {32{inst_csrwr}};
+    wire    [13:0] csr_num;
+    assign  csr_num = inst_reg[23:10];
+    wire    [31:0] csr_wdata;
+    assign  csr_wdata = rkd_value;
+
+    wire    [1:0] inst_exception_type;
+    assign  inst_exception_type = {inst_ertn, inst_syscall};
+
+    assign  exception_message = {   exception_state,   //83
+                                    inst_exception_type, //82
+                                    csr_re,   //80
+                                    csr_we,   //79
+                                    csr_wmask,//78
+                                    csr_num,  //46
+                                    csr_wdata //32
+                                };
+
+
 
 endmodule

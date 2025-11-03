@@ -10,6 +10,7 @@ module MEM(
     input [4:0]     mem_ld_from_exe,
     input [4:0]     dest_from_exe,
     input [31:0]    alu_result_from_exe,
+    input [32:0]    timer_cnt_global_value_and_en,
     //to WB
     output          ready_go,
     input           WB_allow_in,
@@ -18,6 +19,7 @@ module MEM(
     output [31:0]   data_to_reg,
     output          reg_en,
     output [4:0]    dest,
+    output [31:0]   dram_addr,
     //to dram
     input  [31:0] data_sram_rdata,
     //valid
@@ -26,8 +28,8 @@ module MEM(
     output [31:0] forward_data_mem,
     output        forward_en_mem,
     //exception related
-    input  [82:0] exception_message_from_exe,
-    output [82:0] exception_message_to_wb,
+    input  [87:0] exception_message_from_exe,
+    output [87:0] exception_message_to_wb,
     input         ertn_flush,
     input         wb_ex,
     output  [1:0] exception_message_to_exe
@@ -54,7 +56,8 @@ module MEM(
     reg [4:0]  mem_ld_reg;
     reg [4:0]  dest_reg;
     reg [31:0] alu_result_reg;
-    reg [82:0] exception_message_reg;
+    reg [87:0] exception_message_reg;
+    reg [32:0] timer_cnt_global_value_and_en_reg;
     always @(posedge clk) begin
         if (reset) begin
             inst_reg       <= 32'b0;
@@ -63,7 +66,8 @@ module MEM(
             mem_ld_reg     <= 5'b0;
             dest_reg       <= 5'b0;
             alu_result_reg <= 32'b0;
-            exception_message_reg <= 83'b0;
+            exception_message_reg <= 87'b0;
+            timer_cnt_global_value_and_en_reg <= 33'b0;
         end
         else if (ready_go_exe &allow_in) begin
             inst_reg       <= inst_from_exe;
@@ -73,8 +77,13 @@ module MEM(
             dest_reg       <= dest_from_exe;
             alu_result_reg <= alu_result_from_exe;
             exception_message_reg <= exception_message_from_exe;
+            timer_cnt_global_value_and_en_reg <= timer_cnt_global_value_and_en;
         end
     end
+    wire inst_rdcntv;
+    assign inst_rdcntv = timer_cnt_global_value_and_en_reg[0];
+    wire [31:0] timer_cnt_global_value;
+    assign timer_cnt_global_value = timer_cnt_global_value_and_en_reg[32:1];
     assign reg_en     = reg_en_reg;
     assign dest       = dest_reg;
     assign allow_in   = ~valid|(WB_allow_in&&ready_go);
@@ -82,8 +91,8 @@ module MEM(
     assign inst_mem   = inst_reg;
     assign pc_mem     = pc_reg;
     assign data_to_reg= ld_inst ? sram_rdata : alu_result_reg;
-    assign forward_data_mem = alu_result_reg;
-    assign forward_en_mem   = ~ld_inst & ~csr_we;
+    assign forward_data_mem = inst_rdcntv?timer_cnt_global_value:alu_result_reg;
+    assign forward_en_mem   = ~ld_inst & ~csr_re;
     wire   ld_inst;
     assign ld_inst = mem_ld_reg != 5'b0;
     wire   ld_b;
@@ -118,13 +127,14 @@ module MEM(
                         ld_h   ? data_h :
                         ld_b   ? data_b :
                                   32'b0;
+    assign dram_addr = alu_result_reg;
 
 //exception related signals
     wire exception_state;
-    assign exception_state = exception_message_reg[82];
+    assign exception_state = exception_message_reg[87];
 
-    wire csr_we;
-    assign csr_we = exception_message_reg[78];
+    wire csr_re;
+    assign csr_re = exception_message_reg[79];
     assign exception_message_to_wb = exception_message_reg;
 
     wire inst_ertn;

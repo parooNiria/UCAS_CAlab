@@ -13,6 +13,7 @@ module IF(
     input         allow_in       ,
     output [31:0] inst_if        ,
     output [31:0] pc_if          ,
+    output        exception_adef ,
 
     input         flush          ,
     input  [31:0] newpc          ,
@@ -113,5 +114,6 @@ module IF(
     assign ready_go = ~flush&valid&~wb_ex&~ertn_flush;
     assign inst_if   = ~keep ? inst_keep : inst_sram_rdata;
     assign pc_if     = pc;
+    assign exception_adef = (pc[1:0] != 2'b0) & valid;
 
 endmodule

@@ -8,6 +8,7 @@ module ID(
     input [31:0]    pc_from_if,
     output          flush,
     output [31:0]   newpc,
+    input           exception_adef_if,
     //to EX
     output          ready_go,
     input           EX_allow_in,
@@ -22,6 +23,7 @@ module ID(
     output          div_en, 
     output [31:0]   rdata1_to_exe,//spare for inst store 
     output [31:0]   rdata2_to_exe, //not used now,spare for future
+    output [1:0]    inst_rdcntv,
     //to regfile
     output [4:0]    raddr1,
     input [31:0]    rdata1,
@@ -41,9 +43,10 @@ module ID(
     input          forward_en_from_exe,
     input          forward_en_from_mem,
     //exception related
-    output [82:0]  exception_message,
+    output [87:0]  exception_message,
     input          ertn_flush,
-    input          wb_ex
+    input          wb_ex,
+    input          has_int
 );
 
     wire [63:0] op_31_26_d;
@@ -114,6 +117,10 @@ module ID(
     wire        inst_csrxchg;
     wire        inst_ertn;
     wire        inst_syscall;
+    wire        inst_rdcntvl_w;
+    wire        inst_rdcntvh_w;
+    wire        inst_rdcntvh_w;
+    wire        inst_break;
 
     wire        need_ui5;
     wire        need_si12;
@@ -222,6 +229,22 @@ module ID(
     assign inst_csrxchg = op_31_26_d[6'h1] & ~inst_reg[25] & ~inst_reg[24] & (rj != 5'b0 | rj != 5'b1);
     assign inst_ertn    = op_31_26_d[6'h1] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & inst_reg[14:10] == 5'b01110 & inst_reg[9:0] == 10'b00000;
     assign inst_syscall = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h16];
+    assign inst_rdcntvl_w = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h00] & (inst_reg[14:10] == 5'b11000)& (inst_reg[9:5] == 5'b00000);
+    assign inst_rdcntvh_w = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h00] & (inst_reg[14:10] == 5'b11001);
+    assign inst_rdcntid_w = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h00] & (inst_reg[14:10] == 5'b11000)&& (inst_reg[9:5] != 5'b00000) && (inst_reg[4:0] == 5'b00000);
+    assign inst_break = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h14];
+
+    wire exception_ine;
+    assign exception_ine = ~(inst_add_w  | inst_sub_w  | inst_slt    | inst_sltu   | inst_nor    | inst_and    |
+                             inst_or     | inst_xor    | inst_slli_w | inst_srli_w | inst_srai_w | inst_addi_w |
+                             inst_ld_w   | inst_st_w   | inst_jirl   | inst_b      | inst_bl     | inst_beq    |
+                             inst_bne    | inst_lu12i_w| inst_slti   | inst_sltiu  | inst_andi   | inst_ori    |
+                             inst_xori   | inst_sll_w  | inst_srl_w  | inst_sra_w  | inst_pcaddu12i| inst_mul_w  |
+                             inst_mulh_w | inst_mulh_wu| inst_div_w  | inst_mod_w  | inst_div_wu | inst_mod_wu |
+                             inst_blt    | inst_bge    | inst_bltu   | inst_bgeu   | inst_ld_b   | inst_ld_h   |
+                             inst_ld_bu  | inst_ld_hu  | inst_st_b   | inst_st_h   | inst_csrrd  | inst_csrwr  |
+                             inst_csrxchg| inst_ertn  | inst_syscall| inst_rdcntvl_w|inst_rdcntvh_w|inst_break |
+                             inst_rdcntid_w) & valid & (~exception_adef);
     wire [18:0] alu_op;
     assign alu_op_id = alu_op;
     assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_w | inst_st_w
@@ -337,19 +360,26 @@ module ID(
     //Interactive signal
     assign pc_id = pc_reg;
     reg [31:0] pc_reg;
+    reg exception_adef_id;
     always @(posedge clk) begin
         if (reset) begin
             pc_reg <= 32'b0;
+            exception_adef_id <= 1'b0;
         end
         else if (allow_in && if_ready) begin
             pc_reg <= pc_from_if;
+            exception_adef_id <= exception_adef_if;
         end
     end
     assign ready_go = valid & ~conflict;
     assign allow_in = ~valid | (ready_go & EX_allow_in);
     wire dst_is_r1;
     assign dst_is_r1  = inst_bl;
-    assign dest = dst_is_r1 ? 5'd1 : rd;
+    wire dst_is_rj;
+    assign dst_is_rj = inst_rdcntid_w;
+    assign dest = dst_is_r1 ? 5'd1 
+                  : dst_is_rj ? rj
+                  : rd;
     assign reg_en = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_st_b & ~inst_st_h & ~inst_ertn & ~inst_syscall;
     assign mem_en = {5{inst_st_w}}  & 5'b10011 |
                     {5{inst_st_b}}  & 5'b10001 |
@@ -366,7 +396,7 @@ module ID(
     
     //about conflict
     wire   no_rj;
-    assign no_rj = inst_b | inst_lu12i_w | inst_bl | inst_pcaddu12i | inst_ertn | inst_syscall | inst_csrrd | inst_csrwr;
+    assign no_rj = inst_b | inst_lu12i_w | inst_bl | inst_pcaddu12i | inst_ertn | inst_syscall | inst_csrrd | inst_csrwr | inst_rdcntid_w | inst_rdcntvl_w | inst_rdcntvh_w;
     wire   have_rk;
     assign have_rk = inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_nor | inst_and | inst_or | inst_xor | inst_mul_w | inst_mulh_w | inst_mulh_wu
                   | inst_div_w | inst_mod_w | inst_div_wu | inst_mod_wu | inst_sll_w | inst_srl_w | inst_sra_w;
@@ -401,31 +431,35 @@ module ID(
 
 //exception related signals
     wire   exception_state;
-    assign exception_state = valid&inst_syscall;
-
+    wire   exception_adef;
+    assign exception_adef = valid&exception_adef_id;
+    wire   exception_int;
+    assign exception_int = valid&has_int;
+    wire   exception_ale;
+    assign exception_ale = 1'b0;
+    assign exception_state = valid & (inst_break | inst_syscall | exception_ine | exception_adef | exception_int | exception_ale);
     wire    csr_re;
-    assign  csr_re = inst_csrrd | inst_csrwr | inst_csrxchg;
+    assign  csr_re = inst_csrrd | inst_csrwr | inst_csrxchg | inst_rdcntid_w;
     wire    csr_we;
     assign  csr_we = inst_csrwr | inst_csrxchg;
     wire    [31:0] csr_wmask;
     assign  csr_wmask = {32{inst_csrxchg}} & rj_value | {32{inst_csrwr}};
     wire    [13:0] csr_num;
-    assign  csr_num = inst_reg[23:10];
+    assign  csr_num = inst_rdcntid_w ? 14'h0040 : inst_reg[23:10];
     wire    [31:0] csr_wdata;
     assign  csr_wdata = rkd_value;
+    wire    [6:0] exception_type;
+    assign  exception_type = {exception_int,exception_adef,exception_ine,exception_ale,inst_break,inst_ertn, inst_syscall};
 
-    wire    [1:0] inst_exception_type;
-    assign  inst_exception_type = {inst_ertn, inst_syscall};
-
-    assign  exception_message = {   exception_state,   //83
-                                    inst_exception_type, //82
+    assign  exception_message = {   exception_state,   //88
+                                    exception_type, //87
                                     csr_re,   //80
                                     csr_we,   //79
                                     csr_wmask,//78
                                     csr_num,  //46
                                     csr_wdata //32
                                 };
-
+    assign inst_rdcntv = {inst_rdcntvh_w, inst_rdcntvl_w};
 
 
 endmodule

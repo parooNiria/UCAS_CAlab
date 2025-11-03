@@ -25,6 +25,7 @@ wire flush;
 wire [31:0] inst_if;
 wire [31:0] pc_if;
 wire ready_go_if;
+wire exception_adef;
 IF IF_PART(
     .clk            (clk            ),
     .reset          (reset          ),
@@ -40,7 +41,7 @@ IF IF_PART(
     .inst_if        (inst_if       ),
     .pc_if          (pc_if         ),
     .allow_in       (allow_in_id  ),
-
+    .exception_adef (exception_adef ),
     .flush          (flush         ),
     .newpc          (newpc          ),
     .ertn_flush     (ertn_flush     ),
@@ -67,6 +68,7 @@ wire [4:0]  raddr2;
 wire [31:0] rdata2_to_exe;
 wire [31:0] rdata1_to_exe;
 wire        div_en_to_exe;
+wire [1:0]  inst_rdcntv;
 ID ID_PART(
     .clk            (clk            ),
     .reset          (reset          ),
@@ -77,6 +79,7 @@ ID ID_PART(
     .pc_from_if     (pc_if         ),
     .flush          (flush         ),
     .newpc          (newpc         ),
+    .exception_adef_if (exception_adef ),
     //to EX
     .ready_go       (ready_go_id   ),
     .EX_allow_in    (allow_in_exe  ),
@@ -90,7 +93,8 @@ ID ID_PART(
     .div_en        (div_en_to_exe ),
     .mem_en         (mem_en_to_exe ),
     .rdata2_to_exe  (rdata2_to_exe ), 
-    .rdata1_to_exe  (rdata1_to_exe),    
+    .rdata1_to_exe  (rdata1_to_exe),
+    .inst_rdcntv    (inst_rdcntv  ),
     //to regfile
     .raddr1         (raddr1        ),
     .rdata1         (rdata1        ),
@@ -112,7 +116,8 @@ ID ID_PART(
     //exception related
     .exception_message(exception_message_from_id),
     .ertn_flush     (ertn_flush     ),
-    .wb_ex          (wb_ex          )
+    .wb_ex          (wb_ex          ),
+    .has_int       (has_int       )
 );
 
 wire        allow_in_exe;
@@ -128,7 +133,8 @@ wire        ex_reg_en_valid;
 assign      ex_reg_en_valid = exe_valid & reg_en_to_mem;
 wire [31:0] forward_data_exe;
 wire        forward_en_from_exe;
-wire [82:0] exception_message_from_id;
+wire [87:0] exception_message_from_id;
+wire [32:0] timer_cnt_global_value_and_en;
 EXE EXE_PART(
     .clk            (clk            ),
     .reset          (reset          ),
@@ -146,6 +152,7 @@ EXE EXE_PART(
     .mem_en_from_id (mem_en_to_exe),
     .rdata2_from_id (rdata2_to_exe ),
     .rdata1_from_id (rdata1_to_exe ),
+    .inst_rdcntv    (inst_rdcntv   ),
     //to MEM
     .ready_go       (ready_go_exe  ),
     .MEM_allow_in   (allow_in_mem  ),
@@ -155,6 +162,7 @@ EXE EXE_PART(
     .reg_en        (reg_en_to_mem ),
     .mem_ld_message         (mem_ld_message   ),
     .dest           (dest_to_mem   ),
+    .timer_cnt_global_value_and_en(timer_cnt_global_value_and_en),
     //to dram
     .data_sram_en   (data_sram_en  ),
     .data_sram_we   (data_sram_we  ),
@@ -185,8 +193,9 @@ wire        mem_reg_en_valid;
 assign mem_reg_en_valid = MEM_valid & reg_en_to_wb;
 wire [31:0] forward_data_mem;
 wire forward_en_mem;
-wire [82:0] exception_message_to_mem;
+wire [87:0] exception_message_to_mem;
 wire [1:0] exception_message_from_mem; 
+wire [31:0] dram_addr;
 MEM MEM_PART(
     .clk            (clk            ),
     .reset          (reset          ),
@@ -199,6 +208,7 @@ MEM MEM_PART(
     .mem_ld_from_exe(mem_ld_message),
     .dest_from_exe (dest_to_mem    ),
     .alu_result_from_exe(alu_result_exe),
+    .timer_cnt_global_value_and_en(timer_cnt_global_value_and_en),
     //to WB
     .ready_go       (ready_go_mem   ),
     .WB_allow_in    (allow_in_wb    ),
@@ -207,6 +217,7 @@ MEM MEM_PART(
     .data_to_reg    (data_to_reg_mem),
     .reg_en        (reg_en_to_wb   ),
     .dest           (dest_to_wb     ),
+    .dram_addr      (dram_addr      ),
     //to dram
     .data_sram_rdata(data_sram_rdata),
     //valid
@@ -233,7 +244,7 @@ wire        WB_valid;
 wire        wb_reg_en_valid;
 assign wb_reg_en_valid = WB_valid & rf_we;
 wire [31:0] forward_data_wb;
-wire [82:0] exception_message_to_wb;
+wire [87:0] exception_message_to_wb;
 WB WB_PART(
     .clk            (clk            ),
     .reset          (reset          ),
@@ -245,6 +256,7 @@ WB WB_PART(
     .data_to_reg_from_mem(data_to_reg_mem),
     .reg_en_from_mem(reg_en_to_wb   ),
     .dest_from_mem  (dest_to_wb     ),
+    .dram_addr      (dram_addr      ),
     //to regfile
     .waddr          (dest           ),
     .wdata          (wdata          ),
@@ -267,7 +279,8 @@ WB WB_PART(
     .wb_ecode       (wb_ecode       ),
     .wb_esubcode    (wb_esubcode    ),
     .wb_pc          (wb_pc          ),
-    .exception_message_from_mem(exception_message_to_wb)
+    .exception_message_from_mem(exception_message_to_wb),
+    .wb_vaddr       (wb_vaddr       )
 );
 
 regfile regfile_PART(
@@ -299,7 +312,12 @@ wire [5:0] wb_ecode;
 wire [8:0] wb_esubcode;
 wire [31:0] ex_entry;
 wire [31:0] ertn_entry;
-
+wire has_int;
+wire [31:0] wb_vaddr;
+wire ipi_ini_in;
+wire [7:0] hw_int_in;
+assign ipi_ini_in = 1'b0;
+assign hw_int_in = 8'b0;
 csr csr_PART(
     .clk        (clk        ),
     .reset      (reset      ),
@@ -315,6 +333,10 @@ csr csr_PART(
     .wb_ecode   (wb_ecode   ),
     .wb_esubcode(wb_esubcode),
     .ex_entry   (ex_entry   ),
-    .ertn_entry (ertn_entry )
+    .ertn_entry (ertn_entry ),
+    .has_int    (has_int    ),
+    .wb_vaddr   (wb_vaddr   ),
+    .ipi_ini_in (ipi_ini_in ),
+    .hw_int_in  (hw_int_in  )
 );
 endmodule

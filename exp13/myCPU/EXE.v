@@ -15,12 +15,14 @@ module EXE(
     input           div_en_from_id,
     input [31:0]    rdata2_from_id,
     input [31:0]    rdata1_from_id,
+    input [1:0]     inst_rdcntv,
     //to MEM
     output          ready_go,
     input           MEM_allow_in,
     output [31:0]   inst_exe,
     output [31:0]   pc_exe,
     output [31:0]   alu_result,
+    output [32:0]   timer_cnt_global_value_and_en,
     output          reg_en,
     output [4:0]    mem_ld_message,
     output [4:0]    dest,
@@ -35,8 +37,8 @@ module EXE(
     output [31:0] forward_data_exe,
     output        forward_en_exe,
     //exception related
-    input  [82:0] exception_message_from_id,
-    output [82:0] exception_message_to_mem,
+    input  [87:0] exception_message_from_id,
+    output [87:0] exception_message_to_mem,
     input         ertn_flush,
     input         wb_ex,
     input  [1:0]  exception_message_from_mem
@@ -55,6 +57,19 @@ module EXE(
             valid <= 1'b0;
         end
     end
+    wire inst_rdcntvh_w = inst_rdcntv_reg[1];
+    wire inst_rdcntvl_w = inst_rdcntv_reg[0];
+    reg [63:0] timer_cnt_global;
+    always @(posedge clk) begin
+        if (reset) begin
+            timer_cnt_global <= 64'b0;
+        end
+        else begin
+            timer_cnt_global <= timer_cnt_global + 64'b1;
+        end
+    end
+    assign timer_cnt_global_value_and_en = {{32{inst_rdcntvh_w}}&timer_cnt_global[63:32]
+                                  |{32{inst_rdcntvl_w}}&timer_cnt_global[31:0],inst_rdcntvh_w|inst_rdcntvl_w};
     wire [31:0] alu_result_without_div_mul;
     wire [31:0] alu_result_with_div;
     alu u_alu(
@@ -166,7 +181,8 @@ module EXE(
     reg        reg_en_reg;
     reg [4:0]  mem_en_reg;
     reg        div_en_reg;
-    reg [82:0] exception_message_reg;
+    reg [87:0] exception_message_reg;
+    reg [1:0]  inst_rdcntv_reg;
     always @(posedge clk) begin
         if (reset) begin
             inst_reg   <= 32'b0;
@@ -180,7 +196,8 @@ module EXE(
             rdata2_reg <= 32'b0;
             rdata1_reg <= 32'b0;
             div_en_reg <= 1'b0;
-            exception_message_reg <= 83'b0;
+            exception_message_reg <= 87'b0;
+            inst_rdcntv_reg <= 2'b0;
         end
         else if (ready_go_id &allow_in) begin
             inst_reg   <= inst_from_id;
@@ -195,6 +212,7 @@ module EXE(
             rdata1_reg <= rdata1_from_id;
             div_en_reg <= div_en_from_id;
             exception_message_reg <= exception_message_from_id;
+            inst_rdcntv_reg <= inst_rdcntv;
         end
     end
     wire mul_type;
@@ -205,7 +223,7 @@ module EXE(
     assign inst_exe   = inst_reg;
     assign pc_exe     = pc_reg;
     assign forward_data_exe = alu_result_without_div_mul;
-    assign forward_en_exe = (~mem_ld)&&(div_en_reg==1'b0)&&(mul_type==1'b0)&&(~csr_we);
+    assign forward_en_exe = (~mem_ld)&&(div_en_reg==1'b0)&&(mul_type==1'b0)&&(~csr_re);
 //mem deal part
     wire   mem_type;
     wire   mem_st;
@@ -238,20 +256,44 @@ module EXE(
                              mem_h ? {2{rdata2_reg[15:0]}} :
                             rdata2_reg;
 //exception related
-    wire csr_we;
-    assign csr_we = exception_message_reg[78];
+    wire csr_re;
+    assign csr_re = exception_message_reg[79];
 
-    wire exception_state_exe;
-    assign exception_state_exe = exception_message_reg[82];
-    assign exception_message_to_mem = exception_message_reg;
+    wire exception_state_exe_now;
+    assign exception_state_exe_now = (exception_int|exception_adef|exception_ine|exception_ale|inst_break|inst_syscall)&valid;
 
+    wire exception_int;
+    wire exception_adef;
+    wire exception_ine;
+    wire exception_ale;
+    wire inst_break;
+    wire inst_syscall;
+    wire inst_ertn;
+    assign exception_int = exception_message_reg[86];
+    assign exception_adef = exception_message_reg[85];
+    assign exception_ine = exception_message_reg[84];
+    assign exception_ale = exception_message_reg[83]|(((mem_w & alu_result[1:0]!=2'b00)|((mem_hu|mem_h)&alu_result[0]))&~exception_adef);
+    assign inst_break = exception_message_reg[82];
+    assign inst_ertn = exception_message_reg[81];
+    assign inst_syscall = exception_message_reg[80];
     wire exception_state_mem;
     wire ertn_mem;
     assign exception_state_mem = exception_message_from_mem[0];
     assign ertn_mem = exception_message_from_mem[1];
 
     wire ex_stall_mem_store;
-    assign ex_stall_mem_store = exception_state_exe
+    assign ex_stall_mem_store = exception_state_exe_now
                                 |wb_ex | ertn_flush
                                 |exception_state_mem | ertn_mem;
+
+    assign exception_message_to_mem = {   exception_state_exe_now,   //88
+                                          exception_int,             //87
+                                          exception_adef,            //86
+                                          exception_ine,             //85
+                                          exception_ale,             //84
+                                          inst_break,                //83
+                                          inst_ertn,                 //82
+                                          inst_syscall,              //80
+                                          exception_message_reg[79:0]
+                                        };
 endmodule

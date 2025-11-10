@@ -2,16 +2,24 @@ module mycpu_top(
     input  wire        clk,
     input  wire        resetn,
     // inst sram interface
-    output wire        inst_sram_en,
-    output wire [3:0]  inst_sram_we,
+    output wire        inst_sram_req,
+    output wire        inst_sram_wr,
+    output wire [1:0]  inst_sram_size,
+    output wire [3:0]  inst_sram_wstrb,
     output wire [31:0] inst_sram_addr,
     output wire [31:0] inst_sram_wdata,
+    input  wire        inst_sram_addr_ok,
+    input  wire        inst_sram_data_ok,
     input  wire [31:0] inst_sram_rdata,
     // data sram interface
-    output wire        data_sram_en,
-    output wire [3:0]  data_sram_we,
+    output wire        data_sram_req,
+    output wire        data_sram_wr,
+    output wire [1:0]  data_sram_size,
+    output wire [3:0]  data_sram_wstrb,
     output wire [31:0] data_sram_addr,
     output wire [31:0] data_sram_wdata,
+    input  wire        data_sram_addr_ok,
+    input  wire        data_sram_data_ok,
     input  wire [31:0] data_sram_rdata,
     // trace debug interface
     output wire [31:0] debug_wb_pc,
@@ -30,17 +38,21 @@ IF IF_PART(
     .clk            (clk            ),
     .reset          (reset          ),
     // inst sram interface
-    .inst_sram_en   (inst_sram_en   ),
-    .inst_sram_wen  (inst_sram_we   ),
-    .inst_sram_addr (inst_sram_addr ),
-    .inst_sram_wdata(inst_sram_wdata),
-    .inst_sram_rdata(inst_sram_rdata), 
+    .inst_sram_req   (inst_sram_req   ),
+    .inst_sram_wr    (inst_sram_wr    ),
+    .inst_sram_addr  (inst_sram_addr  ),
+    .inst_sram_wdata (inst_sram_wdata ),
+    .inst_sram_rdata (inst_sram_rdata ),
+    .inst_sram_addr_ok(inst_sram_addr_ok),
+    .inst_sram_data_ok(inst_sram_data_ok),
+    .inst_sram_wstrb(inst_sram_wstrb),
+    .inst_sram_size (inst_sram_size ),
 
     //to ID
     .ready_go       (ready_go_if   ),
     .inst_if        (inst_if       ),
     .pc_if          (pc_if         ),
-    .allow_in       (allow_in_id  ),
+    .allow_in_id    (allow_in_id   ),
     .exception_adef (exception_adef ),
     .flush          (flush         ),
     .newpc          (newpc          ),
@@ -126,7 +138,7 @@ wire [31:0] inst_exe;
 wire [31:0] pc_exe;
 wire [31:0] alu_result_exe;
 wire        reg_en_to_mem;
-wire [4:0]  mem_ld_message;
+wire [6:0]  mem_message;
 wire [4:0]  dest_to_mem;
 wire        exe_valid;
 wire        ex_reg_en_valid;
@@ -160,13 +172,16 @@ EXE EXE_PART(
     .pc_exe         (pc_exe        ),
     .alu_result     (alu_result_exe),
     .reg_en        (reg_en_to_mem ),
-    .mem_ld_message         (mem_ld_message   ),
+    .mem_message         (mem_message   ),
     .dest           (dest_to_mem   ),
     .timer_cnt_global_value_and_en(timer_cnt_global_value_and_en),
     //to dram
-    .data_sram_en   (data_sram_en  ),
-    .data_sram_we   (data_sram_we  ),
+    .data_sram_req   (data_sram_req  ),
+    .data_sram_wr   (data_sram_wr  ),
+    .data_sram_size (data_sram_size),
+    .data_sram_wstrb(data_sram_wstrb),
     .data_sram_addr (data_sram_addr),
+    .data_sram_addr_ok(data_sram_addr_ok),
     .data_sram_wdata(data_sram_wdata),
     //valid
     .valid         (exe_valid     ),
@@ -205,7 +220,7 @@ MEM MEM_PART(
     .inst_from_exe (inst_exe       ),
     .pc_from_exe   (pc_exe         ),
     .reg_en_from_exe(reg_en_to_mem ),
-    .mem_ld_from_exe(mem_ld_message),
+    .mem_from_exe(mem_message),
     .dest_from_exe (dest_to_mem    ),
     .alu_result_from_exe(alu_result_exe),
     .timer_cnt_global_value_and_en(timer_cnt_global_value_and_en),
@@ -220,6 +235,7 @@ MEM MEM_PART(
     .dram_addr      (dram_addr      ),
     //to dram
     .data_sram_rdata(data_sram_rdata),
+    .data_sram_data_ok(data_sram_data_ok),
     //valid
     .valid         (MEM_valid     ),
     //bypass

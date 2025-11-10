@@ -139,5 +139,5 @@ module MEM(
 
     wire inst_ertn;
     assign inst_ertn = exception_message_reg[81];
-    assign exception_message_to_exe = {inst_ertn, exception_state};
+    assign exception_message_to_exe = {inst_ertn&valid, exception_state&valid};
 endmodule

@@ -24,13 +24,16 @@ module EXE(
     output [31:0]   alu_result,
     output [32:0]   timer_cnt_global_value_and_en,
     output          reg_en,
-    output [4:0]    mem_ld_message,
+    output [6:0]    mem_message,
     output [4:0]    dest,
     //to dram
-    output wire        data_sram_en,
-    output wire [3:0]  data_sram_we,
+    output wire        data_sram_req,
+    output wire        data_sram_wr,
+    output wire [1:0]  data_sram_size,
+    output wire [3:0]  data_sram_wstrb,
     output wire [31:0] data_sram_addr,
     output wire [31:0] data_sram_wdata,
+    input  wire        data_sram_addr_ok,
     //valid
     output reg       valid,
     //bypass
@@ -219,12 +222,24 @@ module EXE(
     assign mul_type = alu_op_reg[12]|alu_op_reg[13]|alu_op_reg[14];
     assign dest       = dest_reg;
     assign allow_in   = ~valid | (ready_go&&MEM_allow_in);
-    assign ready_go   = valid&((!div_en_reg) | (current_state==3'b100&&div_result_ready));
+    assign ready_go   = valid&((!div_en_reg) | (current_state==3'b100&&div_result_ready))&((~mem_type)|(data_sram_addr_ok&data_sram_req)|mem_req_ready|ex_stall_mem_store);
     assign inst_exe   = inst_reg;
     assign pc_exe     = pc_reg;
     assign forward_data_exe = alu_result_without_div_mul;
     assign forward_en_exe = (~mem_ld)&&(div_en_reg==1'b0)&&(mul_type==1'b0)&&(~csr_re);
 //mem deal part
+    reg    mem_req_ready;
+    always @(posedge clk) begin
+        if (reset) begin
+            mem_req_ready <= 1'b0;
+        end
+        else if (ready_go & MEM_allow_in) begin
+            mem_req_ready <= 1'b0;
+        end        
+        else if (data_sram_addr_ok&data_sram_req&valid) begin
+            mem_req_ready <= 1'b1;
+        end
+    end
     wire   mem_type;
     wire   mem_st;
     wire   mem_ld;
@@ -241,17 +256,23 @@ module EXE(
     assign mem_bu = mem_type & mem_en_reg[1:0]==2'b01 & mem_en_reg[2];
     assign mem_hu = mem_type & mem_en_reg[1:0]==2'b10 & mem_en_reg[2];
     assign mem_w  = mem_type & mem_en_reg[1:0]==2'b11;
-    assign mem_ld_message = {5{mem_ld}}&{mem_w,mem_h,mem_b,mem_hu,mem_bu};
+    assign mem_message = {mem_ld,mem_st,mem_w,mem_h,mem_b,mem_hu,mem_bu};
     wire   [3:0]wen_half;
     assign wen_half = {4{alu_result[1]}}&4'b1100 | {4{~alu_result[1]}}&4'b0011;
     wire   [3:0]wen_b;
     assign wen_b = 4'b0001 << alu_result[1:0];
-    assign data_sram_en    = valid;
-    assign data_sram_we    = (mem_w?4'b1111:
+    
+    assign data_sram_req    = valid&~mem_req_ready&mem_type&~ex_stall_mem_store;
+    assign data_sram_wr     = mem_st;
+    assign data_sram_size   = (mem_w?2'b10:
+                              (mem_h|mem_hu)?2'b01:
+                              (mem_b|mem_bu)?2'b00:2'b10
+                            );
+    assign data_sram_wstrb    = (mem_w?4'b1111:
                               mem_h?wen_half:
                               mem_b?wen_b:4'b0000
-                            )&{4{valid}}&{4{mem_st}}&{4{~ex_stall_mem_store}};
-    assign data_sram_addr  = {alu_result[31:2],2'b00};
+                            )&{4{valid}}&{4{mem_st}};
+    assign data_sram_addr  = alu_result;
     assign data_sram_wdata = mem_b ? {4{rdata2_reg[7:0]}} :
                              mem_h ? {2{rdata2_reg[15:0]}} :
                             rdata2_reg;

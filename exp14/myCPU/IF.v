@@ -2,15 +2,19 @@ module IF(
     input         clk,
     input         reset,
     // inst sram interface
-    output        inst_sram_en   ,
-    output [ 3:0] inst_sram_wen  ,
-    output [31:0] inst_sram_addr ,
-    output [31:0] inst_sram_wdata,
-    input  [31:0] inst_sram_rdata, 
+    output wire        inst_sram_req,
+    output wire        inst_sram_wr,
+    output wire [1:0]  inst_sram_size,
+    output wire [3:0]  inst_sram_wstrb,
+    output wire [31:0] inst_sram_addr,
+    output wire [31:0] inst_sram_wdata,
+    input  wire        inst_sram_addr_ok,
+    input  wire        inst_sram_data_ok,
+    input  wire [31:0] inst_sram_rdata,
 
     //to ID
     output        ready_go       ,
-    input         allow_in       ,
+    input         allow_in_id    ,
     output [31:0] inst_if        ,
     output [31:0] pc_if          ,
     output        exception_adef ,
@@ -23,15 +27,14 @@ module IF(
     input  [31:0] ex_entry,
     input  [31:0] ertn_entry 
 );  
-    wire       handshake;
-    assign handshake = ready_go & allow_in;
-    //initial cpu && IF valid state Part
-    reg         valid;
-    reg         start;
-    reg         before_first_inst;
-    //simply pc = 32'h1bfffffc
-    wire        to_valid;
-    //start cpu
+    reg    valid_pre_if;
+//pre-if
+    reg    start;
+    reg   [31:0] preif_pc;
+    wire  [31:0] next_preif_pc;
+    wire  preif_pc_update;
+    wire  [31:0] preif_to_if_pc;
+    wire  [31:0] preif_to_sram_pc;
     always @(posedge clk) begin
         if (reset) begin
             start <= 1'b1;
@@ -40,80 +43,108 @@ module IF(
             start <= 1'b0;
         end
     end
+
     always @(posedge clk) begin
         if (reset) begin
-            before_first_inst <= 1'b0;
+            valid_pre_if <= 1'b0;
         end
         else if (start) begin
-            before_first_inst <= 1'b1;
+            valid_pre_if <= 1'b1;
         end
-        else 
-            before_first_inst <= 1'b0;
-    end
-    assign to_valid = ~start;//if idram needs more cycles, could change here
-    always @(posedge clk) begin
-        if (reset) 
-            valid <= 1'b0;
-        else if(pc_update)
-            valid <= to_valid;
-        else if (flush)
-            valid <= 1'b0;//flush not used here,just for future update
     end
 
-    //pc part
-    reg  [31:0] pc;
-    wire [31:0] nextpc;
-    reg  keep;
-    wire pc_update;
-    assign pc_update = (ready_go & allow_in)|flush|before_first_inst|wb_ex|ertn_flush;
     always @(posedge clk) begin
         if (reset) begin
-            pc <= 32'h1bfffffc;     //trick: to make nextpc be 0x1c000000 during reset
-
+            preif_pc <= 32'h1c000000;
         end
-        else if (pc_update) begin
-            pc <= nextpc;
+        else if (preif_pc_update) begin
+            preif_pc <= next_preif_pc;
         end
     end
-    //when pc update,inst from ram now needs to be kept
-    //considering inst come from ram after one cycle delay than pc change
-    //so we need a keep signal to tell if we need to keep the inst from last cycle
+    assign preif_pc_update = (((inst_sram_addr_ok&inst_sram_req) | wb_ex | ertn_flush | flush) & valid_pre_if);
+    assign next_preif_pc = wb_ex&~inst_sram_addr_ok ? ex_entry :
+                           ertn_flush&~inst_sram_addr_ok ? ertn_entry :
+                           flush&~inst_sram_addr_ok ? newpc :
+                           preif_to_sram_pc + 4;
+    assign preif_to_sram_pc =   wb_ex ? ex_entry :
+                                ertn_flush ? ertn_entry :
+                                flush ? newpc :
+                                preif_pc;
+    assign preif_to_if_pc   = preif_to_sram_pc;
+
+
+    assign inst_sram_addr  = {preif_to_sram_pc[31:2],2'b00};
+    assign inst_sram_req   = valid_pre_if&allow_in_if;
+    assign inst_sram_wr    = 1'b0;
+    assign inst_sram_size  = 2'b10;
+    assign inst_sram_wstrb = 4'b0;
+    
+    wire   pre_if_ready_go;
+    assign pre_if_ready_go = inst_sram_addr_ok&valid_pre_if;
+
+
+//if
+    reg [31:0] pc;
     always @(posedge clk) begin
         if (reset) begin
-            keep <= 1'b0;
+            pc <= 32'h1bfffffc;
         end
-        else if (pc_update) begin
-            keep <= 1'b1;
+        else if (pre_if_ready_go&allow_in_if) begin
+            pc <= preif_to_if_pc;
         end
-        else 
-            keep <= 1'b0;
     end
-    reg [31:0] inst_keep;
+
+    reg valid_if;
     always @(posedge clk) begin
         if (reset) begin
-            inst_keep <= 32'b0;
+            valid_if <= 1'b0;
         end
-        else if (keep) begin
-            inst_keep <= inst_sram_rdata;
+        else if (pre_if_ready_go&allow_in_if) begin
+            valid_if <= 1'b1;
+        end
+        else if (ready_go&allow_in_id|wb_ex|flush|ertn_flush) begin
+            valid_if <= 1'b0;
         end
     end
-//pre_if
-    wire [31:0] seq_pc;
-    assign seq_pc = pc + 4;
-    assign inst_sram_en    = valid | before_first_inst;
-    assign inst_sram_wen   = 4'b0;
-    assign inst_sram_addr  = nextpc;
-    assign inst_sram_wdata = 32'b0;
 
-    assign nextpc = wb_ex ? ex_entry :
-                    ertn_flush ? ertn_entry :
-                    flush ? newpc :
-                    seq_pc;
+    reg wait_data;
+    always @(posedge clk) begin
+        if(reset)
+            wait_data <= 1'b0;
+        else if (~(valid_if& ((~wait_data & inst_sram_data_ok)| if_already_recv_inst))&valid_if&(wb_ex|flush|ertn_flush))  begin
+            wait_data <= 1'b1;
+        end
+        else if(inst_sram_data_ok)
+            wait_data <= 1'b0;
+    end
 
-//if_id
-    assign ready_go = ~flush&valid&~wb_ex&~ertn_flush;
-    assign inst_if   = ~keep ? inst_keep : inst_sram_rdata;
+    reg [31:0] inst_sram_rdata_reg;
+    always @(posedge clk) begin
+        if (reset) begin
+            inst_sram_rdata_reg <= 32'b0;
+        end
+        else if (inst_sram_data_ok) begin
+            inst_sram_rdata_reg <= inst_sram_rdata;
+        end
+    end
+
+    reg if_already_recv_inst;
+    always @(posedge clk) begin
+        if (reset) begin
+            if_already_recv_inst <= 1'b0;
+        end
+        else if ( valid_if & ((~wait_data & inst_sram_data_ok)| if_already_recv_inst)& allow_in_id) begin
+            if_already_recv_inst <= 1'b0;
+        end
+        else if (inst_sram_data_ok&~wait_data) begin
+            if_already_recv_inst <= 1'b1;
+        end
+    end
+
+    assign allow_in_if = ~valid_if | (ready_go & allow_in_id) | wb_ex | flush | ertn_flush;
+    assign ready_go    = valid_if & ((~wait_data & inst_sram_data_ok)| if_already_recv_inst)&(~wb_ex)&(~flush)&(~ertn_flush);
+    assign inst_if   = (inst_sram_data_ok) ? inst_sram_rdata:inst_sram_rdata_reg;
     assign pc_if     = pc;
-    assign exception_adef = (pc[1:0] != 2'b0) & valid;
+    assign exception_adef = (pc[1:0] != 2'b0) & valid_if;
 
 endmodule

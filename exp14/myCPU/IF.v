@@ -111,7 +111,7 @@ module IF(
     always @(posedge clk) begin
         if(reset)
             wait_data <= 1'b0;
-        else if (~(valid_if& ((~wait_data & inst_sram_data_ok)| if_already_recv_inst))&valid_if&(wb_ex|flush|ertn_flush))  begin
+        else if (~get_data_state&valid_if&(wb_ex|flush|ertn_flush))  begin
             wait_data <= 1'b1;
         end
         else if(inst_sram_data_ok)
@@ -133,16 +133,18 @@ module IF(
         if (reset) begin
             if_already_recv_inst <= 1'b0;
         end
-        else if ( valid_if & ((~wait_data & inst_sram_data_ok)| if_already_recv_inst)& allow_in_id) begin
+        else if ( valid_if & ready_go & allow_in_id | ertn_flush | flush | wb_ex) begin
             if_already_recv_inst <= 1'b0;
         end
-        else if (inst_sram_data_ok&~wait_data) begin
+        else if (inst_sram_data_ok&valid_if &~wait_data) begin
             if_already_recv_inst <= 1'b1;
         end
     end
 
     assign allow_in_if = ~valid_if | (ready_go & allow_in_id) | wb_ex | flush | ertn_flush;
-    assign ready_go    = valid_if & ((~wait_data & inst_sram_data_ok)| if_already_recv_inst)&(~wb_ex)&(~flush)&(~ertn_flush);
+    wire get_data_state;
+    assign get_data_state = ((~wait_data & inst_sram_data_ok)| if_already_recv_inst)&valid_if;
+    assign ready_go    = get_data_state&(~wb_ex)&(~flush)&(~ertn_flush);
     assign inst_if   = (inst_sram_data_ok) ? inst_sram_rdata:inst_sram_rdata_reg;
     assign pc_if     = pc;
     assign exception_adef = (pc[1:0] != 2'b0) & valid_if;

@@ -119,7 +119,6 @@ module ID(
     wire        inst_syscall;
     wire        inst_rdcntvl_w;
     wire        inst_rdcntvh_w;
-    wire        inst_rdcntvh_w;
     wire        inst_break;
 
     wire        need_ui5;

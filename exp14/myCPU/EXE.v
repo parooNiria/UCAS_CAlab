@@ -97,21 +97,39 @@ module EXE(
                           | ({32{alu_op_reg[13]}} & mulh_w_result)
                           | ({32{alu_op_reg[14]}} & mulh_wu_result);
     //div part
-    reg [2:0]     current_state;
+    reg [3:0]     current_state;
     always @(posedge clk) begin
         if (reset) begin
-            current_state <= 3'b001;
+            current_state <= 4'b0001;
         end
         else if (div_en_from_id & allow_in & ready_go_id) begin
-            current_state <= 3'b010;
+            current_state <= 4'b0010;
         end
         else if(current_state[1]&commit) begin
-            current_state <= 3'b100;
+            current_state <= 4'b0100;
+        end
+        else if(current_state[2]&div_result_ready&ready_go&MEM_allow_in) begin
+            current_state <= 4'b0001;
         end
         else if(current_state[2]&div_result_ready) begin
-            current_state <= 3'b001;
+            current_state <= 4'b1000;
+        end
+        else if(current_state[3]&ready_go&MEM_allow_in) begin
+            current_state <= 4'b0001;
         end
     end
+    //div result reg
+    reg [31:0] div_result_reg;
+    always @(posedge clk) begin
+        if (reset) begin
+            div_result_reg <= 32'b0;
+        end
+        else if (current_state[2]&div_result_ready) begin
+            div_result_reg <= alu_result_with_div;
+        end
+    end 
+    wire [31:0] alu_result_div_part;
+    assign alu_result_div_part = (current_state[3]) ? div_result_reg : alu_result_with_div;
     wire signed_div;
     assign signed_div = alu_op_reg[15]|alu_op_reg[16];
     wire tvalid_div_signed;
@@ -170,7 +188,7 @@ module EXE(
                               | ({32{alu_op_reg[17]}} & div_result_unsigned)
                               | ({32{alu_op_reg[18]}} & mod_result_unsigned);
     assign alu_result = (mul_type & valid) ? alu_result_mul :
-                    (div_en_reg & valid) ? alu_result_with_div : alu_result_without_div_mul;
+                    (div_en_reg & valid) ? alu_result_div_part : alu_result_without_div_mul;
 
     assign reg_en     = reg_en_reg;
     reg [31:0] rdata2_reg;
@@ -222,7 +240,7 @@ module EXE(
     assign mul_type = alu_op_reg[12]|alu_op_reg[13]|alu_op_reg[14];
     assign dest       = dest_reg;
     assign allow_in   = ~valid | (ready_go&&MEM_allow_in);
-    assign ready_go   = valid&((!div_en_reg) | (current_state==3'b100&&div_result_ready))&((~mem_type)|(data_sram_addr_ok&data_sram_req)|mem_req_ready|ex_stall_mem_store);
+    assign ready_go   = valid&((!div_en_reg) | (current_state[2]&&div_result_ready) | current_state[3])&((~mem_type)|(data_sram_addr_ok&data_sram_req)|mem_req_ready|ex_stall_mem_store);
     assign inst_exe   = inst_reg;
     assign pc_exe     = pc_reg;
     assign forward_data_exe = alu_result_without_div_mul;

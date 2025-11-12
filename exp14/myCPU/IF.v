@@ -33,8 +33,6 @@ module IF(
     reg   [31:0] preif_pc;
     wire  [31:0] next_preif_pc;
     wire  preif_pc_update;
-    wire  [31:0] preif_to_if_pc;
-    wire  [31:0] preif_to_sram_pc;
     always @(posedge clk) begin
         if (reset) begin
             start <= 1'b1;
@@ -62,25 +60,18 @@ module IF(
         end
     end
     assign preif_pc_update = (((inst_sram_addr_ok&inst_sram_req) | wb_ex | ertn_flush | flush) & valid_pre_if);
-    assign next_preif_pc = wb_ex&~inst_sram_addr_ok ? ex_entry :
-                           ertn_flush&~inst_sram_addr_ok ? ertn_entry :
-                           flush&~inst_sram_addr_ok ? newpc :
-                           preif_to_sram_pc + 4;
-    assign preif_to_sram_pc =   wb_ex ? ex_entry :
-                                ertn_flush ? ertn_entry :
-                                flush ? newpc :
-                                preif_pc;
-    assign preif_to_if_pc   = preif_to_sram_pc;
-
-
-    assign inst_sram_addr  = {preif_to_sram_pc[31:2],2'b00};
-    assign inst_sram_req   = valid_pre_if&allow_in_if;
+    assign next_preif_pc = wb_ex ? ex_entry :
+                           ertn_flush ? ertn_entry :
+                           flush ? newpc :
+                           preif_pc + 4;
+    assign inst_sram_addr  = {preif_pc[31:2],2'b00};
+    assign inst_sram_req   = valid_pre_if&allow_in_if&~flush&~ertn_flush&~wb_ex;
     assign inst_sram_wr    = 1'b0;
     assign inst_sram_size  = 2'b10;
     assign inst_sram_wstrb = 4'b0;
     
     wire   pre_if_ready_go;
-    assign pre_if_ready_go = inst_sram_addr_ok&valid_pre_if;
+    assign pre_if_ready_go = inst_sram_addr_ok & valid_pre_if & ~flush & ~ertn_flush & ~wb_ex;
 
 
 //if
@@ -90,7 +81,7 @@ module IF(
             pc <= 32'h1bfffffc;
         end
         else if (pre_if_ready_go&allow_in_if) begin
-            pc <= preif_to_if_pc;
+            pc <= preif_pc;
         end
     end
 
@@ -102,7 +93,7 @@ module IF(
         else if (pre_if_ready_go&allow_in_if) begin
             valid_if <= 1'b1;
         end
-        else if (ready_go&allow_in_id|wb_ex|flush|ertn_flush) begin
+        else if (ready_go&allow_in_id |wb_ex|flush|ertn_flush) begin
             valid_if <= 1'b0;
         end
     end

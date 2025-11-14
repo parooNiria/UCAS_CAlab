@@ -1,358 +1,167 @@
 module mycpu_top(
-    input  wire        clk,
-    input  wire        resetn,
-    // inst sram interface
-    output wire        inst_sram_req,
-    output wire        inst_sram_wr,
-    output wire [1:0]  inst_sram_size,
-    output wire [3:0]  inst_sram_wstrb,
-    output wire [31:0] inst_sram_addr,
-    output wire [31:0] inst_sram_wdata,
-    input  wire        inst_sram_addr_ok,
-    input  wire        inst_sram_data_ok,
-    input  wire [31:0] inst_sram_rdata,
-    // data sram interface
-    output wire        data_sram_req,
-    output wire        data_sram_wr,
-    output wire [1:0]  data_sram_size,
-    output wire [3:0]  data_sram_wstrb,
-    output wire [31:0] data_sram_addr,
-    output wire [31:0] data_sram_wdata,
-    input  wire        data_sram_addr_ok,
-    input  wire        data_sram_data_ok,
-    input  wire [31:0] data_sram_rdata,
+    input  aclk   ,
+    input  aresetn,
+    // read req channel
+    output [ 3:0] arid   , // 读请求ID
+    output [31:0] araddr , // 读请求地址
+    output [ 7:0] arlen  , // 读请求传输长度（数据传输拍数）
+    output [ 2:0] arsize , // 读请求传输大小（数据传输每拍的字节数）
+    output [ 1:0] arburst, // 传输类型
+    output [ 1:0] arlock , // 原子锁
+    output [ 3:0] arcache, // Cache属性
+    output [ 2:0] arprot , // 保护属性
+    output        arvalid, // 读请求地址有效
+    input         arready, // 读请求地址握手信号
+    // read response channel
+    input [ 3:0]  rid    , // 读请求ID号，同一请求rid与arid一致
+    input [31:0]  rdata  , // 读请求读出的数据
+    input [ 1:0]  rresp  , // 读请求是否完成                        [可忽略]
+    input         rlast  , // 读请求最后一拍数据的指示信号           [可忽略]
+    input         rvalid , // 读请求数据有效
+    output        rready , // Master端准备好接受数据
+    // write req channel
+    output [ 3:0] awid   , // 写请求的ID号
+    output [31:0] awaddr , // 写请求的地址
+    output [ 7:0] awlen  , // 写请求传输长度（拍数）
+    output [ 2:0] awsize , // 写请求传输每拍字节数
+    output [ 1:0] awburst, // 写请求传输类型
+    output [ 1:0] awlock , // 原子锁
+    output [ 3:0] awcache, // Cache属性
+    output [ 2:0] awprot , // 保护属性
+    output        awvalid, // 写请求地址有效
+    input         awready, // Slave端准备好接受地址传输   
+    // write data channel
+    output [ 3:0] wid    , // 写请求的ID号
+    output [31:0] wdata  , // 写请求的写数据
+    output [ 3:0] wstrb  , // 写请求字节选通位
+    output        wlast  , // 写请求的最后一拍数据的指示信号
+    output        wvalid , // 写数据有效
+    input         wready , // Slave端准备好接受写数据传输   
+    // write response channel
+    input  [ 3:0] bid    , // 写请求的ID号            [可忽略]
+    input  [ 1:0] bresp  , // 写请求完成信号          [可忽略]
+    input         bvalid , // 写请求响应有效
+    output        bready , // Master端准备好接收响应信号
     // trace debug interface
     output wire [31:0] debug_wb_pc,
     output wire [ 3:0] debug_wb_rf_we,
     output wire [ 4:0] debug_wb_rf_wnum,
     output wire [31:0] debug_wb_rf_wdata
 );
-wire         reset;
-assign reset = ~resetn;
-wire flush;
-wire [31:0] inst_if;
-wire [31:0] pc_if;
-wire ready_go_if;
-wire exception_adef;
-IF IF_PART(
-    .clk            (clk            ),
-    .reset          (reset          ),
+
     // inst sram interface
-    .inst_sram_req   (inst_sram_req   ),
-    .inst_sram_wr    (inst_sram_wr    ),
-    .inst_sram_addr  (inst_sram_addr  ),
-    .inst_sram_wdata (inst_sram_wdata ),
-    .inst_sram_rdata (inst_sram_rdata ),
-    .inst_sram_addr_ok(inst_sram_addr_ok),
-    .inst_sram_data_ok(inst_sram_data_ok),
-    .inst_sram_wstrb(inst_sram_wstrb),
-    .inst_sram_size (inst_sram_size ),
+    wire        inst_sram_req;
+    wire        inst_sram_wr;
+    wire [ 1:0] inst_sram_size;
+    wire [ 3:0] inst_sram_wstrb;
+    wire [31:0] inst_sram_addr;
+    wire [31:0] inst_sram_wdata;
+    wire        inst_sram_addr_ok;
+    wire        inst_sram_data_ok;
+    wire [31:0] inst_sram_rdata;
+    // data sram interface
+    wire        data_sram_req;
+    wire        data_sram_wr;
+    wire [ 1:0] data_sram_size;
+    wire [ 3:0] data_sram_wstrb;
+    wire [31:0] data_sram_addr;
+    wire [31:0] data_sram_wdata;
+    wire        data_sram_addr_ok;
+    wire        data_sram_data_ok;
+    wire [31:0] data_sram_rdata;
 
-    //to ID
-    .ready_go       (ready_go_if   ),
-    .inst_if        (inst_if       ),
-    .pc_if          (pc_if         ),
-    .allow_in_id    (allow_in_id   ),
-    .exception_adef (exception_adef ),
-    .flush          (flush         ),
-    .newpc          (newpc          ),
-    .ertn_flush     (ertn_flush     ),
-    .wb_ex          (wb_ex          ),
-    .ex_entry       (ex_entry       ),
-    .ertn_entry     (ertn_entry     )
+    mycpu_core my_core(
+        .clk            (aclk       ),
+        .resetn         (aresetn    ),
+        // inst sram interface
+        .inst_sram_req      (inst_sram_req      ),
+        .inst_sram_wr       (inst_sram_wr       ),
+        .inst_sram_size     (inst_sram_size     ),
+        .inst_sram_wstrb    (inst_sram_wstrb    ),
+        .inst_sram_addr     (inst_sram_addr     ),
+        .inst_sram_wdata    (inst_sram_wdata    ),
+        .inst_sram_addr_ok  (inst_sram_addr_ok  ),
+        .inst_sram_data_ok  (inst_sram_data_ok  ),
+        .inst_sram_rdata    (inst_sram_rdata    ),
+        // data sram interface
+        .data_sram_req      (data_sram_req      ),
+        .data_sram_wr       (data_sram_wr       ),
+        .data_sram_size     (data_sram_size     ),
+        .data_sram_wstrb    (data_sram_wstrb    ),
+        .data_sram_addr     (data_sram_addr     ),
+        .data_sram_wdata    (data_sram_wdata    ),
+        .data_sram_addr_ok  (data_sram_addr_ok  ),
+        .data_sram_data_ok  (data_sram_data_ok  ),
+        .data_sram_rdata    (data_sram_rdata    ),
+        // trace debug interface
+        .debug_wb_pc        (debug_wb_pc        ),
+        .debug_wb_rf_we     (debug_wb_rf_we     ),
+        .debug_wb_rf_wnum   (debug_wb_rf_wnum   ),
+        .debug_wb_rf_wdata  (debug_wb_rf_wdata  )
+    ); 
+
+    bridge my_axi_sram_bridge(
+    .clk               (aclk               ),
+    .aresetn            (aresetn            ),
+
+    .arid               (arid               ),
+    .araddr             (araddr             ),
+    .arlen              (arlen              ),
+    .arsize             (arsize             ),
+    .arburst            (arburst            ),
+    .arlock             (arlock             ),
+    .arcache            (arcache            ),
+    .arprot             (arprot             ),
+    .arvalid            (arvalid            ),
+    .arready            (arready            ),
+
+    .rid                (rid                ),
+    .rdata              (rdata              ),
+    .rvalid             (rvalid             ),
+    .rlast              (rlast              ),
+    .rready             (rready             ),
+
+    .awid               (awid               ),
+    .awaddr             (awaddr             ),
+    .awlen              (awlen              ),
+    .awsize             (awsize             ),
+    .awburst            (awburst            ),
+    .awlock             (awlock             ),
+    .awcache            (awcache            ),
+    .awprot             (awprot             ),
+    .awvalid            (awvalid            ),
+    .awready            (awready            ),
+
+    .wid                (wid                ),
+    .wdata              (wdata              ),
+    .wstrb              (wstrb              ),
+    .wlast              (wlast              ),
+    .wvalid             (wvalid             ),
+    .wready             (wready             ),
+
+    .bid                (bid                ),
+    .bvalid             (bvalid             ),
+    .bready             (bready             ),
+
+    .inst_sram_req      (inst_sram_req      ),
+    .inst_sram_wr       (inst_sram_wr       ),
+    .inst_sram_size     (inst_sram_size     ),
+    .inst_sram_addr     (inst_sram_addr     ),
+    .inst_sram_wstrb    (inst_sram_wstrb    ),
+    .inst_sram_wdata    (inst_sram_wdata    ),
+    .inst_sram_addr_ok  (inst_sram_addr_ok  ),
+    .inst_sram_data_ok  (inst_sram_data_ok  ),
+    .inst_sram_rdata    (inst_sram_rdata    ),
+
+    .data_sram_req      (data_sram_req      ),
+    .data_sram_wr       (data_sram_wr       ),
+    .data_sram_size     (data_sram_size     ),
+    .data_sram_addr     (data_sram_addr     ),
+    .data_sram_wstrb    (data_sram_wstrb    ),
+    .data_sram_wdata    (data_sram_wdata    ),
+    .data_sram_addr_ok  (data_sram_addr_ok  ),
+    .data_sram_data_ok  (data_sram_data_ok  ),
+    .data_sram_rdata    (data_sram_rdata    )
 );
 
-wire        allow_in_id;
-wire [31:0] newpc;
-wire ready_go_id;
-wire [31:0] inst_id;
-wire [31:0] pc_id;
-wire [31:0] src1_to_exe;
-wire [31:0] src2_to_exe;
-wire [18:0] alu_op_to_exe;
-wire [4:0]  dest_to_exe;
-wire        reg_en_to_exe;
-wire [4:0]  mem_en_to_exe;
-wire [31:0] rdata1;
-wire [31:0] rdata2;
-wire [4:0]  raddr1;
-wire [4:0]  raddr2;
-wire [31:0] rdata2_to_exe;
-wire [31:0] rdata1_to_exe;
-wire        div_en_to_exe;
-wire [1:0]  inst_rdcntv;
-ID ID_PART(
-    .clk            (clk            ),
-    .reset          (reset          ),
-    //IF_ID
-    .if_ready       (ready_go_if   ),
-    .allow_in       (allow_in_id   ),
-    .inst_from_if   (inst_if       ),
-    .pc_from_if     (pc_if         ),
-    .flush          (flush         ),
-    .newpc          (newpc         ),
-    .exception_adef_if (exception_adef ),
-    //to EX
-    .ready_go       (ready_go_id   ),
-    .EX_allow_in    (allow_in_exe  ),
-    .inst_id        (inst_id       ),
-    .pc_id          (pc_id         ),
-    .alu_op_id      (alu_op_to_exe),
-    .dest           (dest_to_exe   ),
-    .src1           (src1_to_exe   ),
-    .src2           (src2_to_exe   ),
-    .reg_en        (reg_en_to_exe ),
-    .div_en        (div_en_to_exe ),
-    .mem_en         (mem_en_to_exe ),
-    .rdata2_to_exe  (rdata2_to_exe ), 
-    .rdata1_to_exe  (rdata1_to_exe),
-    .inst_rdcntv    (inst_rdcntv  ),
-    //to regfile
-    .raddr1         (raddr1        ),
-    .rdata1         (rdata1        ),
-    .raddr2         (raddr2        ),
-    .rdata2         (rdata2        ),
-    //data conflict
-    .ex_reg_en_valid(ex_reg_en_valid),
-    .mem_reg_en_valid(mem_reg_en_valid),
-    .wb_reg_en_valid(wb_reg_en_valid),
-    .ex_dest        (dest_to_mem       ),
-    .mem_dest       (dest_to_wb      ),
-    .wb_dest        (dest           ),
-    //bypass
-    .forward_data_from_exe(forward_data_exe),
-    .forward_data_from_mem(forward_data_mem),
-    .forward_data_from_wb(forward_data_wb),
-    .forward_en_from_exe(forward_en_from_exe),
-    .forward_en_from_mem(forward_en_mem),
-    //exception related
-    .exception_message(exception_message_from_id),
-    .ertn_flush     (ertn_flush     ),
-    .wb_ex          (wb_ex          ),
-    .has_int       (has_int       )
-);
-
-wire        allow_in_exe;
-wire        ready_go_exe;
-wire [31:0] inst_exe;
-wire [31:0] pc_exe;
-wire [31:0] alu_result_exe;
-wire        reg_en_to_mem;
-wire [6:0]  mem_message;
-wire [4:0]  dest_to_mem;
-wire        exe_valid;
-wire        ex_reg_en_valid;
-assign      ex_reg_en_valid = exe_valid & reg_en_to_mem;
-wire [31:0] forward_data_exe;
-wire        forward_en_from_exe;
-wire [87:0] exception_message_from_id;
-wire [32:0] timer_cnt_global_value_and_en;
-EXE EXE_PART(
-    .clk            (clk            ),
-    .reset          (reset          ),
-    //from ID
-    .ready_go_id    (ready_go_id   ),
-    .allow_in       (allow_in_exe  ),
-    .inst_from_id   (inst_id       ),
-    .pc_from_id     (pc_id         ),
-    .src1_from_id   (src1_to_exe   ),
-    .src2_from_id   (src2_to_exe   ),
-    .alu_op_from_id (alu_op_to_exe),
-    .dest_from_id   (dest_to_exe   ),
-    .reg_en_from_id (reg_en_to_exe),
-    .div_en_from_id (div_en_to_exe ),
-    .mem_en_from_id (mem_en_to_exe),
-    .rdata2_from_id (rdata2_to_exe ),
-    .rdata1_from_id (rdata1_to_exe ),
-    .inst_rdcntv    (inst_rdcntv   ),
-    //to MEM
-    .ready_go       (ready_go_exe  ),
-    .MEM_allow_in   (allow_in_mem  ),
-    .inst_exe       (inst_exe      ),
-    .pc_exe         (pc_exe        ),
-    .alu_result     (alu_result_exe),
-    .reg_en        (reg_en_to_mem ),
-    .mem_message         (mem_message   ),
-    .dest           (dest_to_mem   ),
-    .timer_cnt_global_value_and_en(timer_cnt_global_value_and_en),
-    //to dram
-    .data_sram_req   (data_sram_req  ),
-    .data_sram_wr   (data_sram_wr  ),
-    .data_sram_size (data_sram_size),
-    .data_sram_wstrb(data_sram_wstrb),
-    .data_sram_addr (data_sram_addr),
-    .data_sram_addr_ok(data_sram_addr_ok),
-    .data_sram_wdata(data_sram_wdata),
-    //valid
-    .valid         (exe_valid     ),
-    //bypass
-    .forward_data_exe(forward_data_exe),
-    .forward_en_exe(forward_en_from_exe),
-    //exception related
-    .exception_message_from_id(exception_message_from_id),
-    .exception_message_to_mem(exception_message_to_mem),
-    .ertn_flush     (ertn_flush     ),
-    .wb_ex          (wb_ex          ),
-    .exception_message_from_mem(exception_message_from_mem)
-);
-
-wire ready_go_mem;
-wire        allow_in_mem;
-wire [31:0] inst_mem;
-wire [31:0] pc_mem;
-wire [31:0] data_to_reg_mem;
-wire        reg_en_to_wb;
-wire [4:0]  dest_to_wb;
-wire        MEM_valid;
-wire        mem_reg_en_valid;
-assign mem_reg_en_valid = MEM_valid & reg_en_to_wb;
-wire [31:0] forward_data_mem;
-wire forward_en_mem;
-wire [87:0] exception_message_to_mem;
-wire [1:0] exception_message_from_mem; 
-wire [31:0] dram_addr;
-MEM MEM_PART(
-    .clk            (clk            ),
-    .reset          (reset          ),
-    //from EXE
-    .ready_go_exe  (ready_go_exe   ),
-    .allow_in       (allow_in_mem   ),
-    .inst_from_exe (inst_exe       ),
-    .pc_from_exe   (pc_exe         ),
-    .reg_en_from_exe(reg_en_to_mem ),
-    .mem_from_exe(mem_message),
-    .dest_from_exe (dest_to_mem    ),
-    .alu_result_from_exe(alu_result_exe),
-    .timer_cnt_global_value_and_en(timer_cnt_global_value_and_en),
-    //to WB
-    .ready_go       (ready_go_mem   ),
-    .WB_allow_in    (allow_in_wb    ),
-    .inst_mem       (inst_mem       ),
-    .pc_mem         (pc_mem         ),
-    .data_to_reg    (data_to_reg_mem),
-    .reg_en        (reg_en_to_wb   ),
-    .dest           (dest_to_wb     ),
-    .dram_addr      (dram_addr      ),
-    //to dram
-    .data_sram_rdata(data_sram_rdata),
-    .data_sram_data_ok(data_sram_data_ok),
-    //valid
-    .valid         (MEM_valid     ),
-    //bypass
-    .forward_data_mem(forward_data_mem),
-    .forward_en_mem(forward_en_mem),
-
-    //exception related
-    .exception_message_from_exe(exception_message_to_mem),
-    .exception_message_to_wb(exception_message_to_wb),
-    .ertn_flush     (ertn_flush     ),
-    .wb_ex          (wb_ex          ),
-    .exception_message_to_exe(exception_message_from_mem)
-);
-
-wire allow_in_wb;
-wire [31:0] inst_wb;
-wire [31:0] pc;
-wire [31:0] wdata;
-wire        rf_we;
-wire [4:0]  dest;
-wire        WB_valid;
-wire        wb_reg_en_valid;
-assign wb_reg_en_valid = WB_valid & rf_we;
-wire [31:0] forward_data_wb;
-wire [87:0] exception_message_to_wb;
-WB WB_PART(
-    .clk            (clk            ),
-    .reset          (reset          ),
-    //from MEM
-    .ready_go_mem   (ready_go_mem   ),
-    .allow_in       (allow_in_wb    ),
-    .inst_from_mem  (inst_mem       ),
-    .pc_from_mem    (pc_mem         ),
-    .data_to_reg_from_mem(data_to_reg_mem),
-    .reg_en_from_mem(reg_en_to_wb   ),
-    .dest_from_mem  (dest_to_wb     ),
-    .dram_addr      (dram_addr      ),
-    //to regfile
-    .waddr          (dest           ),
-    .wdata          (wdata          ),
-    .we             (rf_we          ),
-    //to trace
-    .inst           (inst_wb        ),
-    .pc             (pc             ),
-    .valid         (WB_valid      ),
-    //bypass
-    .forward_data_wb(forward_data_wb),
-    //exception related
-    .ertn_flush     (ertn_flush     ),
-    .wb_ex          (wb_ex          ),
-    .csr_we         (csr_we         ),
-    .csr_num        (csr_num        ),
-    .csr_wdata      (csr_wdata      ),
-    .csr_wmask      (csr_wmask      ),
-    .csr_re         (csr_re         ),
-    .csr_rdata      (csr_rvalue     ),
-    .wb_ecode       (wb_ecode       ),
-    .wb_esubcode    (wb_esubcode    ),
-    .wb_pc          (wb_pc          ),
-    .exception_message_from_mem(exception_message_to_wb),
-    .wb_vaddr       (wb_vaddr       )
-);
-
-regfile regfile_PART(
-    .clk    (clk      ),
-    .raddr1 (raddr1   ),
-    .rdata1 (rdata1   ),
-    .raddr2 (raddr2   ),
-    .rdata2 (rdata2   ),
-    .we     (rf_we    ),
-    .waddr  (dest     ),
-    .wdata  (wdata    )
-);
-// debug info generate
-assign debug_wb_pc       = pc;
-assign debug_wb_rf_we   = {4{rf_we}};
-assign debug_wb_rf_wnum  = dest;
-assign debug_wb_rf_wdata = wdata;
-
-wire csr_re;
-wire [13:0] csr_num;
-wire [31:0] csr_rvalue;
-wire csr_we;
-wire [31:0] csr_wdata;
-wire [31:0] csr_wmask;
-wire wb_ex;
-wire ertn_flush;
-wire [31:0] wb_pc;
-wire [5:0] wb_ecode;
-wire [8:0] wb_esubcode;
-wire [31:0] ex_entry;
-wire [31:0] ertn_entry;
-wire has_int;
-wire [31:0] wb_vaddr;
-wire ipi_ini_in;
-wire [7:0] hw_int_in;
-assign ipi_ini_in = 1'b0;
-assign hw_int_in = 8'b0;
-csr csr_PART(
-    .clk        (clk        ),
-    .reset      (reset      ),
-    .csr_re     (csr_re     ),
-    .csr_num    (csr_num    ),
-    .csr_rvalue (csr_rvalue ),
-    .csr_we     (csr_we     ),
-    .csr_wdata  (csr_wdata  ),
-    .csr_wmask  (csr_wmask  ),
-    .wb_ex      (wb_ex      ),
-    .ertn_flush (ertn_flush ),
-    .wb_pc      (wb_pc      ),
-    .wb_ecode   (wb_ecode   ),
-    .wb_esubcode(wb_esubcode),
-    .ex_entry   (ex_entry   ),
-    .ertn_entry (ertn_entry ),
-    .has_int    (has_int    ),
-    .wb_vaddr   (wb_vaddr   ),
-    .ipi_ini_in (ipi_ini_in ),
-    .hw_int_in  (hw_int_in  )
-);
 endmodule

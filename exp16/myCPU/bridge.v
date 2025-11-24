@@ -120,6 +120,10 @@ module bridge(
     //当数据写进行中，屏蔽来自数据读的请求
     //当数据读进行中，屏蔽来自数据写的请求
     //对于两个请求的选择，数据请求优先级更高，优先响应
+
+    //为了满足不取消且能准确屏蔽掉if没能握手的请求
+    //对于id号，给出一个fifo实现
+    //对于取指读的id，固定为0
     localparam  DP_IDLE       = 3'b001,
                 DP_BUSY_READ  = 3'b010,
                 DP_BUSY_WRITE = 3'b100;
@@ -128,8 +132,8 @@ module bridge(
     reg [1:0] outstanding_data_reads; //待完成的读请求数
     reg [1:0] outstanding_data_writes; //待完成的写请求数
 
-    wire data_read_starts     = ar_handshake_done && (arid[0] == 1'b1);
-    wire data_read_completed  = r_handshake_done && rlast && (rid[0] == 1'b1);
+    wire data_read_starts     = ar_handshake_done && (arid == 4'b0);
+    wire data_read_completed  = r_handshake_done && rlast && (rid == 4'b0);
 
     wire data_write_starts    = write_req_from_data_valid && data_sram_addr_ok;
     wire data_write_completed = b_handshake_done;
@@ -144,39 +148,6 @@ module bridge(
     assign outstanding_data_writes_next = (data_write_starts && ~data_write_completed) ? (outstanding_data_writes + 1) :
                                        (~data_write_starts && data_write_completed) ? (outstanding_data_writes - 1) :
                                        outstanding_data_writes;
-    reg [31:0] inst_addr_commit_cnt;
-    always @(posedge clk) begin
-        if (~aresetn) begin
-            inst_addr_commit_cnt <= 32'b0;
-        end else if (ar_handshake_done & (arid[0] == 1'b0)) begin
-            inst_addr_commit_cnt <= inst_addr_commit_cnt + 1;
-        end
-    end
-
-    reg [31:0] inst_back_cnt;
-    always @(posedge clk) begin
-        if (~aresetn) begin
-            inst_back_cnt <= 32'b0;
-        end else if (r_handshake_done & (rid[0] == 1'b0)) begin
-            inst_back_cnt <= inst_back_cnt + 1;
-        end
-    end
-
-    wire more = inst_back_cnt > inst_addr_commit_cnt;
-        
-    wire any_read_starts = ar_handshake_done;
-    wire any_read_completed = r_handshake_done;
-    reg [3:0] outstanding_all_reads;
-    always @(posedge clk or negedge aresetn) begin
-        if (~aresetn) begin
-            outstanding_all_reads <= 4'b0;
-        end else if (any_read_starts && !any_read_completed) begin
-            outstanding_all_reads <= outstanding_all_reads + 1;
-        end else if (!any_read_starts && any_read_completed) begin
-            outstanding_all_reads <= outstanding_all_reads - 1;
-        end
-    end
-
 
     always @(posedge clk) begin
         if (~aresetn) begin
@@ -195,6 +166,8 @@ module bridge(
     end
 
 //转换桥一个时间点只能处理数据读，或者数据写，或者空闲
+//注意，对于这种状态表达方式，会导致一个周期浪费，例如，如果此时刻是数据写完成的握手瞬间，此时读请求已经可以发出
+//但是这样需要data_path_state根据next信号变化，next依据valid信号变化，因此会出现逻辑环，只能等一个周期
     assign data_path_state = (outstanding_data_writes > 0) ? DP_BUSY_WRITE :
                              (outstanding_data_reads > 0)  ? DP_BUSY_READ  :
                                                                 DP_IDLE;
@@ -210,6 +183,139 @@ module bridge(
     //在仲裁器转换时，看valid,在仲裁保持，看keep
     //只有对于指令的读请求存在中途取消的可能性
     //值得在报告中指出的是，我通过修改cpu的取指逻辑，使得cpu如果要半途更换地址，一定会先取消再重新发出请求
+
+    //一个fifo结构，记录哪些请求已经发出，哪些是与cpu握手成功的
+    reg      req_valid [0:7];
+    reg      not_empty [0:7];
+    reg      if_handshake_valid [0:7];
+    reg      data_valid [0:7];
+    reg[31:0] data_sram_rdata_fifo [0:7];
+    reg[2:0] current_pointer;
+    reg[2:0] return_pointer;
+    always @(posedge clk) begin
+        if (~aresetn) begin
+            current_pointer <= 3'b1;
+        end else begin
+            if (ar_handshake_done & arid != 4'b0) begin
+                if(current_pointer == 3'b111)
+                    current_pointer <= 3'b001;
+                else
+                    current_pointer <= current_pointer + 1;
+            end
+        end
+    end
+
+    genvar i;
+    generate
+        
+            for (i = 0; i < 8; i = i + 1)
+            begin: req_valid_bit
+                always @(posedge clk or negedge aresetn) begin
+                    if (!aresetn) begin
+                        req_valid[i] <= 1'b0;
+                    end else begin
+                        if (ar_handshake_done && (arid[2:0] == i)) begin
+                            req_valid[i] <= 1'b1;
+                        end
+                        else if (r_handshake_done && rlast && (rid[2:0] == i)) begin
+                            req_valid[i] <= 1'b0;
+                        end
+                    end
+                end
+            end
+    endgenerate
+
+    generate
+            for (i = 0; i < 8; i = i + 1)
+            begin: not_empty_bit_inner
+                always @(posedge clk or negedge aresetn) begin
+                    if (!aresetn) begin
+                        not_empty[i] <= 1'b0;
+                    end else begin
+                        if (ar_handshake_done && (arid[2:0] == i)) begin
+                            not_empty[i] <= 1'b1;
+                        end
+                        else if (empty_set&& return_pointer == i) begin
+                            not_empty[i] <= 1'b0;
+                        end
+                    end
+                end
+            end
+    endgenerate
+
+    generate
+            for (i = 0; i < 8; i = i + 1)
+            begin: if_handshake_valid_bit_inner
+                always @(posedge clk or negedge aresetn) begin
+                    if (!aresetn) begin
+                        if_handshake_valid[i] <= 1'b0;
+                    end else begin
+                        if (ar_handshake_done && (arid[2:0] == i) && if_handshake) begin
+                            if_handshake_valid[i] <= 1'b1;
+                        end
+                        else if (return_pointer == i && inst_sram_data_ok) begin
+                            if_handshake_valid[i] <= 1'b0;
+                        end
+                    end
+                end
+            end
+    endgenerate
+
+    generate
+            for (i = 0; i < 8; i = i + 1)
+            begin: data_valid_bit_inner
+                always @(posedge clk or negedge aresetn) begin
+                    if (!aresetn) begin
+                        data_valid[i] <= 1'b0;
+                    end else begin
+                        if (r_handshake_done && rid[2:0] == i && return_pointer == i) begin
+                            data_valid[i] <= 1'b0;
+                        end
+                        else if(r_handshake_done && rid[2:0] == i & if_handshake_valid[i]) begin
+                            data_valid[i] <= 1'b1;
+                        end
+                        else if (return_pointer == i && inst_sram_data_ok )  begin
+                            data_valid[i] <= 1'b0;
+                        end
+                    end
+                end
+            end
+    endgenerate
+
+    generate
+            for (i = 0; i < 8; i = i + 1)
+            begin: data_reg_inner
+                always @(posedge clk or negedge aresetn) begin
+                    if (!aresetn) begin
+                        data_sram_rdata_fifo[i] <= 32'b0;
+                    end else begin
+                        if (r_handshake_done && (rid[2:0] == i)) begin
+                            data_sram_rdata_fifo[i] <= rdata;
+                        end
+                    end
+                end
+            end
+    endgenerate
+
+    wire mask_req = req_valid[current_pointer];
+
+    always @(posedge clk) begin
+        if (~aresetn) begin
+            return_pointer <= 3'b1;
+        end else begin
+            if (empty_set) begin
+                if(return_pointer == 3'b111)
+                    return_pointer <= 3'b001;
+                else
+                    return_pointer <= return_pointer + 1;
+            end
+        end
+    end
+
+    wire empty_set = not_empty[return_pointer] & 
+                        ((if_handshake_valid[return_pointer] & inst_sram_data_ok) | 
+                        (~if_handshake_valid[return_pointer]));
+
     reg [2:0] arbiter_for_read;
     reg [2:0] arbiter_for_read_next;
     localparam ARB_IDLE = 3'b001,
@@ -237,7 +343,7 @@ module bridge(
                     arbiter_for_read_next = ARB_IDLE;
             end
             ARB_FROM_DATA: begin             //当data握手后，可以直接转入IDLE状态，或则继续下一次请求
-                if (ar_handshake_done & arid[0])
+                if (ar_handshake_done & arid == 4'b0)
                     if (read_req_from_inst_valid)
                         arbiter_for_read_next = ARB_FROM_INST;
                     else
@@ -246,13 +352,7 @@ module bridge(
                     arbiter_for_read_next = ARB_FROM_DATA;
             end
             ARB_FROM_INST: begin             //对于处理指令读请求，可能变更的条件有此时中途取消了，及握手完成
-                if (~keep_read_from_inst) begin        //中途取消，可转入IDLE，或则转入DATA读
-                    if(read_req_from_data_valid)
-                        arbiter_for_read_next = ARB_FROM_DATA;
-                    else
-                        arbiter_for_read_next = ARB_IDLE;
-                end
-                else if(ar_handshake_done & ~arid[0]) begin//握手完成，可转入IDLE，或则转入下一次读 
+                if(ar_handshake_done & arid != 4'b0) begin//握手完成，可转入IDLE，或则转入下一次读 
                     if(read_req_from_data_valid)
                         arbiter_for_read_next = ARB_FROM_DATA;
                     else
@@ -266,23 +366,25 @@ module bridge(
     end
 
     //arvalid信号
-    assign arvalid = (arbiter_for_read[1] & read_req_from_inst_valid) |
-                     (arbiter_for_read[2] & read_req_from_data_valid);
+    assign arvalid = arbiter_for_read[1] & ~mask_req | arbiter_for_read[2];
+
     //arid信号
     reg  [3:0] arid_next;
     always @(posedge clk) begin
         if (~aresetn) begin
             arid <= 4'b0;
-        end else begin
+        end else if(arbiter_for_read[0]&~arbiter_for_read_next[0] |
+                    arbiter_for_read[1]&arbiter_for_read_next[2] |
+                    arbiter_for_read[2]&arbiter_for_read_next[1])begin
             arid <= arid_next;
         end
     end
 
     always @(*) begin
-        if (arbiter_for_read_next[1]) begin
+        if (arbiter_for_read_next[2]) begin
             arid_next = 4'b0; //inst read id = 0
-        end else if (arbiter_for_read_next[2]) begin
-            arid_next = 4'b1; //data read id = 1
+        end else if (arbiter_for_read_next[1]) begin
+            arid_next = current_pointer;
         end else begin
             arid_next = 4'b0;
         end
@@ -293,7 +395,9 @@ module bridge(
     always @(posedge clk) begin
         if (~aresetn) begin
             araddr <= 32'b0;
-        end else begin
+        end else if(arbiter_for_read[0]&~arbiter_for_read_next[0] |
+                    arbiter_for_read[1]&arbiter_for_read_next[2] |
+                    arbiter_for_read[2]&arbiter_for_read_next[1])begin
             araddr <= araddr_next;
         end
     end
@@ -313,7 +417,9 @@ module bridge(
     always @(posedge clk) begin
         if (~aresetn) begin
             arsize <= 3'b0;
-        end else begin
+        end else if(arbiter_for_read[0]&~arbiter_for_read_next[0] |
+                    arbiter_for_read[1]&arbiter_for_read_next[2] |
+                    arbiter_for_read[2]&arbiter_for_read_next[1])begin
             arsize <= arsize_next;
         end
     end
@@ -339,15 +445,16 @@ module bridge(
     end
 
     //arready信号
-    assign inst_sram_addr_ok = arbiter_for_read[1] & arready;
-
+    assign inst_sram_addr_ok = arbiter_for_read[1] & arready & consistence;
+    wire   if_handshake      = inst_sram_addr_ok & read_req_from_inst_valid;
+    wire   consistence       = araddr == inst_sram_addr;
 
 //读响应通道
     assign rready = 1'b1;
-    assign inst_sram_data_ok = (rid[0] == 1'b0) & r_handshake_done;
-    assign data_sram_data_ok = ((rid[0] == 1'b1) & r_handshake_done) | ((bid[0] == 1'b0) & b_handshake_done);
-    assign inst_sram_rdata = (rid[0] == 1'b0) ? rdata : 32'b0;
-    assign data_sram_rdata = (rid[0] == 1'b1) ? rdata : 32'b0;
+    assign inst_sram_data_ok = ((return_pointer == rid[2:0]) & r_handshake_done & if_handshake_valid[return_pointer]) | (if_handshake_valid[return_pointer] & data_valid[return_pointer]);
+    assign data_sram_data_ok = ((rid == 4'b0) & r_handshake_done) | ((bid[0] == 1'b0) & b_handshake_done);
+    assign inst_sram_rdata = (return_pointer == rid[2:0]) & r_handshake_done ? rdata : data_sram_rdata_fifo[return_pointer];
+    assign data_sram_rdata = (rid == 4'b0) ? rdata : 32'b0;
 
 //写请求通道
     //对于写请求，要同时握两次手，因此可以采取对于写请求，在可接受的情况下，先拿过来存在转换桥，此时让直接给cpu地址接受信号就行了

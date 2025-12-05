@@ -11,3 +11,6 @@ exp19/soc_verify/
 exp21/soc_verify/
 exp22/soc_verify/
 exp23/soc_verify/
+exp17/rtl/
+exp17/run_vivado/
+exp17/rtl/xilinx_ip/clk_pll.xci

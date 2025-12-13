@@ -171,8 +171,8 @@ module csr(
     reg        csr_crmd_ie;
     reg       csr_crmd_da;
     reg       csr_crmd_pg;
-    wire [1:0] csr_crmd_datf;
-    wire [1:0] csr_crmd_datm;
+    reg [1:0] csr_crmd_datf;
+    reg [1:0] csr_crmd_datm;
     always @(posedge clk) begin
         if (reset) begin
             csr_crmd_plv <= 2'b0;
@@ -196,8 +196,9 @@ module csr(
 
     // assign csr_crmd_da = 1'b1;
     // assign csr_crmd_pg = 1'b0;
-    assign csr_crmd_datf = 2'b0;
-    assign csr_crmd_datm = 2'b0;
+        //写到19发现，datf和datm必须实现
+    // assign csr_crmd_datf = 2'b0;
+    // assign csr_crmd_datm = 2'b0;
     //完善上述的信号
     always @(posedge clk) begin
         if (reset)
@@ -221,6 +222,22 @@ module csr(
         else if (csr_we && csr_num==`CSR_CRMD)
             csr_crmd_pg <= csr_wmask[`CSR_CRMD_PG]&csr_wdata[`CSR_CRMD_PG]
                         | ~csr_wmask[`CSR_CRMD_PG]&csr_crmd_pg;
+    end
+
+    always @(posedge clk) begin
+        if (reset)
+            csr_crmd_datf <= 2'b0;
+        else if (csr_we && csr_num==`CSR_CRMD)
+            csr_crmd_datf <= csr_wmask[`CSR_CRMD_DATF]&csr_wdata[`CSR_CRMD_DATF]
+                          | ~csr_wmask[`CSR_CRMD_DATF]&csr_crmd_datf;
+    end
+
+    always @(posedge clk) begin
+        if (reset)
+            csr_crmd_datm <= 2'b0; 
+        else if (csr_we && csr_num==`CSR_CRMD)
+            csr_crmd_datm <= csr_wmask[`CSR_CRMD_DATM]&csr_wdata[`CSR_CRMD_DATM]
+                          | ~csr_wmask[`CSR_CRMD_DATM]&csr_crmd_datm;
     end
 
     assign csr_crmd = {23'b0,csr_crmd_datm,csr_crmd_datf,csr_crmd_pg,csr_crmd_da,
@@ -685,6 +702,18 @@ module csr(
     end
     wire [31:0] csr_dmw0;
     wire [31:0] csr_dmw1;
+    assign csr_dmw0_plv0_state = csr_dmw0_plv0;
+    assign csr_dmw0_plv3_state = csr_dmw0_plv3;
+    assign csr_dmw0_pseg_state = csr_dmw0_pseg;
+    assign csr_dmw0_vseg_state = csr_dmw0_vseg;
+    assign csr_dmw0_mat_state = csr_dmw0_mat;
+    assign csr_dmw1_plv0_state = csr_dmw1_plv0;
+    assign csr_dmw1_plv3_state = csr_dmw1_plv3;
+    assign csr_dmw1_pseg_state = csr_dmw1_pseg;
+    assign csr_dmw1_vseg_state = csr_dmw1_vseg;
+    assign csr_dmw1_mat_state = csr_dmw1_mat;
+    assign csr_dmw0 = {csr_dmw0_vseg,1'b0,csr_dmw0_pseg,19'b0,csr_dmw0_mat,csr_dmw0_plv3,2'b0,csr_dmw0_plv0};
+    assign csr_dmw1 = {csr_dmw1_vseg,1'b0,csr_dmw1_pseg,19'b0,csr_dmw1_mat,csr_dmw1_plv3,2'b0,csr_dmw1_plv0};
 
     //现在完成了寄存器的编写，再来完善对应的tlb读写相关端口
     assign csr_tlbidx_index_state = csr_tlbidx_index;

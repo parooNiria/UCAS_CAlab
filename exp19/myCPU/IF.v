@@ -109,7 +109,6 @@ module IF(
                            flush ? newpc :
                            preif_pc + 4;
     //这个地方需要予以改变适应地址翻译模式
-    assign inst_sram_addr  = {preif_pc[31:2],2'b00};
     //地址翻译模块
     //直接地址映射
     wire DMW0_hit = ((csr_addr_mode == 1'b1) && 

@@ -559,7 +559,7 @@ csr csr_PART(
     .tlbsrch_index        (tlbsrch_index    )
 );
 
-    wire [18:0]  s0_ppn;
+    wire [18:0]  s0_vppn;
     wire         s0_va_bit12;
     wire [9:0]   s0_asid;
     wire         s0_found;

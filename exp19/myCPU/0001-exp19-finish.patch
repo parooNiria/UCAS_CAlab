@@ -1,0 +1,131 @@
+From 488b0a5406e0380ed27ec695264cdd23eae61209 Mon Sep 17 00:00:00 2001
+From: parooNiria <paroniria2025@163.com>
+Date: Sun, 14 Dec 2025 01:33:15 +0800
+Subject: [PATCH] exp19 finish
+
+---
+ exp19/myCPU/IF.v         |  1 -
+ exp19/myCPU/WB.v         |  4 ++--
+ exp19/myCPU/csr.v        | 37 +++++++++++++++++++++++++++++++++----
+ exp19/myCPU/mycpu_core.v |  2 +-
+ 4 files changed, 36 insertions(+), 8 deletions(-)
+
+diff --git a/exp19/myCPU/IF.v b/exp19/myCPU/IF.v
+index 23dc844..04663f0 100644
+--- a/exp19/myCPU/IF.v
++++ b/exp19/myCPU/IF.v
+@@ -109,7 +109,6 @@ module IF(
+                            flush ? newpc :
+                            preif_pc + 4;
+     //这个地方需要予以改变适应地址翻译模式
+-    assign inst_sram_addr  = {preif_pc[31:2],2'b00};
+     //地址翻译模块
+     //直接地址映射
+     wire DMW0_hit = ((csr_addr_mode == 1'b1) && 
+diff --git a/exp19/myCPU/WB.v b/exp19/myCPU/WB.v
+index 2b8c80c..561ffa4 100644
+--- a/exp19/myCPU/WB.v
++++ b/exp19/myCPU/WB.v
+@@ -143,7 +143,7 @@ module WB(
+     assign exception_PIS       = exception_state_tlb_reg[3];
+     assign exception_PME       = exception_state_tlb_reg[2];
+     assign exception_PPI_DATA  = exception_state_tlb_reg[1];
+-    assign vaddr_sign = vaddr_about_inst_happen_in_wb;
++    assign vaddr_sign = exception_state_tlb_reg[0]& valid;
+ 
+     wire  inst_tlbwr;
+     wire  inst_tlbrd;
+@@ -157,7 +157,7 @@ module WB(
+     assign inst_tlbrd_happen  = inst_tlbrd & valid & ~wb_ex & ~ertn_flush & ~exception_state;
+     assign inst_tlbfill_happen= inst_tlbfill & valid & ~wb_ex & ~ertn_flush & ~exception_state;
+     assign wrong_addr_is_pc   = exception_tlbr_FETCH | exception_pif | exception_ppi_fetch | exception_adef;
+-    assign vaddr_about_inst_happen_in_wb = inst_tlbwr_happen | inst_tlbrd_happen | inst_tlbfill_happen;
++    assign vaddr_about_inst_happen_in_wb = vaddr_sign;
+     assign exception_int  = exception_message_reg[86];
+     assign exception_adef = exception_message_reg[85];
+     assign exception_ine  = exception_message_reg[84];
+diff --git a/exp19/myCPU/csr.v b/exp19/myCPU/csr.v
+index dd0e291..fdbaa53 100644
+--- a/exp19/myCPU/csr.v
++++ b/exp19/myCPU/csr.v
+@@ -171,8 +171,8 @@ module csr(
+     reg        csr_crmd_ie;
+     reg       csr_crmd_da;
+     reg       csr_crmd_pg;
+-    wire [1:0] csr_crmd_datf;
+-    wire [1:0] csr_crmd_datm;
++    reg [1:0] csr_crmd_datf;
++    reg [1:0] csr_crmd_datm;
+     always @(posedge clk) begin
+         if (reset) begin
+             csr_crmd_plv <= 2'b0;
+@@ -196,8 +196,9 @@ module csr(
+ 
+     // assign csr_crmd_da = 1'b1;
+     // assign csr_crmd_pg = 1'b0;
+-    assign csr_crmd_datf = 2'b0;
+-    assign csr_crmd_datm = 2'b0;
++        //写到19发现，datf和datm必须实现
++    // assign csr_crmd_datf = 2'b0;
++    // assign csr_crmd_datm = 2'b0;
+     //完善上述的信号
+     always @(posedge clk) begin
+         if (reset)
+@@ -223,6 +224,22 @@ module csr(
+                         | ~csr_wmask[`CSR_CRMD_PG]&csr_crmd_pg;
+     end
+ 
++    always @(posedge clk) begin
++        if (reset)
++            csr_crmd_datf <= 2'b0;
++        else if (csr_we && csr_num==`CSR_CRMD)
++            csr_crmd_datf <= csr_wmask[`CSR_CRMD_DATF]&csr_wdata[`CSR_CRMD_DATF]
++                          | ~csr_wmask[`CSR_CRMD_DATF]&csr_crmd_datf;
++    end
++
++    always @(posedge clk) begin
++        if (reset)
++            csr_crmd_datm <= 2'b0; 
++        else if (csr_we && csr_num==`CSR_CRMD)
++            csr_crmd_datm <= csr_wmask[`CSR_CRMD_DATM]&csr_wdata[`CSR_CRMD_DATM]
++                          | ~csr_wmask[`CSR_CRMD_DATM]&csr_crmd_datm;
++    end
++
+     assign csr_crmd = {23'b0,csr_crmd_datm,csr_crmd_datf,csr_crmd_pg,csr_crmd_da,
+                        csr_crmd_ie,csr_crmd_plv};
+     assign csr_addr_mode = csr_crmd_pg;
+@@ -685,6 +702,18 @@ module csr(
+     end
+     wire [31:0] csr_dmw0;
+     wire [31:0] csr_dmw1;
++    assign csr_dmw0_plv0_state = csr_dmw0_plv0;
++    assign csr_dmw0_plv3_state = csr_dmw0_plv3;
++    assign csr_dmw0_pseg_state = csr_dmw0_pseg;
++    assign csr_dmw0_vseg_state = csr_dmw0_vseg;
++    assign csr_dmw0_mat_state = csr_dmw0_mat;
++    assign csr_dmw1_plv0_state = csr_dmw1_plv0;
++    assign csr_dmw1_plv3_state = csr_dmw1_plv3;
++    assign csr_dmw1_pseg_state = csr_dmw1_pseg;
++    assign csr_dmw1_vseg_state = csr_dmw1_vseg;
++    assign csr_dmw1_mat_state = csr_dmw1_mat;
++    assign csr_dmw0 = {csr_dmw0_vseg,1'b0,csr_dmw0_pseg,19'b0,csr_dmw0_mat,csr_dmw0_plv3,2'b0,csr_dmw0_plv0};
++    assign csr_dmw1 = {csr_dmw1_vseg,1'b0,csr_dmw1_pseg,19'b0,csr_dmw1_mat,csr_dmw1_plv3,2'b0,csr_dmw1_plv0};
+ 
+     //现在完成了寄存器的编写，再来完善对应的tlb读写相关端口
+     assign csr_tlbidx_index_state = csr_tlbidx_index;
+diff --git a/exp19/myCPU/mycpu_core.v b/exp19/myCPU/mycpu_core.v
+index 5e5dcd4..673cf0d 100644
+--- a/exp19/myCPU/mycpu_core.v
++++ b/exp19/myCPU/mycpu_core.v
+@@ -559,7 +559,7 @@ csr csr_PART(
+     .tlbsrch_index        (tlbsrch_index    )
+ );
+ 
+-    wire [18:0]  s0_ppn;
++    wire [18:0]  s0_vppn;
+     wire         s0_va_bit12;
+     wire [9:0]   s0_asid;
+     wire         s0_found;
+-- 
+2.45.1.windows.1
+

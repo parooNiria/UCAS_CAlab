@@ -456,8 +456,6 @@ wire ipi_ini_in;
 wire [7:0] hw_int_in;
 assign ipi_ini_in = 1'b0;
 assign hw_int_in = 8'b0;
-wire   csr_addr_mode;
-wire [1:0] crmd_plv_state;
 wire         csr_addr_mode;  //1表示当前为虚地址模式，0表示为物理地址模式
 wire [1:0]   crmd_plv_state;         //当前特权级别
 wire [9:0]   csr_asid_state;        //地址空间标识符

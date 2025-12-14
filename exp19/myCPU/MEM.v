@@ -1,6 +1,6 @@
 module MEM(
     input [31:0]    clk,
-    input [31:0]    reset,
+    input     reset,
     //from EXE
     input           ready_go_exe,
     output          allow_in,

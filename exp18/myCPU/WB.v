@@ -143,7 +143,7 @@ module WB(
     assign exception_PIS       = exception_state_tlb_reg[3];
     assign exception_PME       = exception_state_tlb_reg[2];
     assign exception_PPI_DATA  = exception_state_tlb_reg[1];
-    assign vaddr_sign = vaddr_about_inst_happen_in_wb;
+    assign vaddr_sign = exception_state_tlb_reg[0]& valid;
 
     wire  inst_tlbwr;
     wire  inst_tlbrd;
@@ -157,7 +157,7 @@ module WB(
     assign inst_tlbrd_happen  = inst_tlbrd & valid & ~wb_ex & ~ertn_flush & ~exception_state;
     assign inst_tlbfill_happen= inst_tlbfill & valid & ~wb_ex & ~ertn_flush & ~exception_state;
     assign wrong_addr_is_pc   = exception_tlbr_FETCH | exception_pif | exception_ppi_fetch | exception_adef;
-    assign vaddr_about_inst_happen_in_wb = inst_tlbwr_happen | inst_tlbrd_happen | inst_tlbfill_happen;
+    assign vaddr_about_inst_happen_in_wb = vaddr_sign;
     assign exception_int  = exception_message_reg[86];
     assign exception_adef = exception_message_reg[85];
     assign exception_ine  = exception_message_reg[84];

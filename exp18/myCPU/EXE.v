@@ -188,8 +188,8 @@ module EXE(
     wire tready_divisor_unsigned;
     wire tready_result_signed;
     wire tready_result_unsigned;
-    assign tvalid_div_signed = current_state[1] & signed_div & ~ex_stall_mem_store & ~vaddr_sign_from_mem & ~vaddr_sign_from_wb;
-    assign tvalid_div_unsigned = current_state[1] & ~signed_div & ~ex_stall_mem_store & ~vaddr_sign_from_mem & ~vaddr_sign_from_wb;  //突然发现这个地方也是不能发出开启除法操作信号的，这是之前留下的一个bug，现在改一下
+    assign tvalid_div_signed = current_state[1] & signed_div &  ~vaddr_sign_from_mem & ~vaddr_sign_from_wb;
+    assign tvalid_div_unsigned = current_state[1] & ~signed_div & ~vaddr_sign_from_mem & ~vaddr_sign_from_wb;  //突然发现这个地方也是不能发出开启除法操作信号的，这是之前留下的一个bug，现在改一下
     wire commit_signed;
     wire commit_unsigned;
     wire commit;
@@ -443,8 +443,9 @@ module EXE(
                                       vaddr_sign_next
                                      };
     assign invalidtlb_happen_in_ex = inst_invtlb & valid & ~wb_ex & ~ertn_flush & ~exception_state_mem & ~ertn_mem
-                                     & ~vaddr_sign_from_mem & ~vaddr_sign_from_wb & ~exception_state_exe_now;
+                                     & ~vaddr_sign_from_mem & ~vaddr_sign_from_wb&~exception_int&~exception_adef&~exception_ine&~exception_ale&~inst_break&~inst_syscall;
     assign inst_invtlb_happen = invalidtlb_happen_in_ex;
+    //这个地方形成一个组合环
     assign inst_tlbsrch_happen = inst_tlbsrch & valid & ~wb_ex & ~ertn_flush & ~exception_state_mem & ~ertn_mem
                                      & ~vaddr_sign_from_mem & ~vaddr_sign_from_wb;
     assign invalidtlb_pc = pc_reg;

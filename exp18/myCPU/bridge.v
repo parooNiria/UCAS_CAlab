@@ -35,7 +35,7 @@ module bridge(
     input               awready,
 
     // AXI Write Data Channel
-    output    wire      wid,
+    output    wire [3:0]     wid,
     output reg  [31:0]  wdata,
     output reg  [ 3:0]  wstrb,
     output              wlast,

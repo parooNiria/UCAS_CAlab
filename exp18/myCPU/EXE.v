@@ -47,7 +47,7 @@ module EXE(
     input  [1:0]  exception_message_from_mem,
     //tlb related
     input  [3:0]  exception_state_tlb_id,
-    input  [4:0]  tlb_related_inst_id,
+    input  [5:0]  tlb_related_inst_id,
     output        vaddr_sign,
     input         vaddr_sign_from_mem,
     input         vaddr_sign_from_wb,
@@ -55,7 +55,9 @@ module EXE(
     output        invalidtlb_happen_in_ex,  //这个也可以直接当invtlb送入csr中
     output        [31:0] invalidtlb_pc,
     input         vaddr_about_inst_happen_in_wb,
-    output  [4:0] tlb_related_inst,
+    output  [5:0] tlb_related_inst,
+    input         stall_srch_from_mem,
+    input         stall_srch_from_wb,
     //tlb s1端口
     output wire [ 4:0] invtlb_op,
     output wire        inst_invtlb_happen,
@@ -84,8 +86,10 @@ module EXE(
     input  wire [ 2:0] csr_dmw1_pseg,
     input  wire [ 2:0] csr_dmw1_vseg,   //mat似乎没有用到
 
-    output        tlbsrch_hit,
-    output [3:0]  tlbsrch_index,
+    // output        tlbsrch_hit,
+    // output [3:0]  tlbsrch_index,
+    //修改后这个应该传给MEM级，直到到达wb级才更新
+    output [4:0]  tlbsrch_csr_message,
     input  [ 1:0] crmd_plv, 
     input  [9:0]  csr_asid,
     input  [18:0]  tlbehi_vppn,
@@ -253,7 +257,7 @@ module EXE(
     reg [87:0] exception_message_reg;
     reg [1:0]  inst_rdcntv_reg;
     reg [3:0]  exception_state_tlb_reg;
-    reg [4:0]  tlb_related_inst_reg;
+    reg [5:0]  tlb_related_inst_reg;
     always @(posedge clk) begin
         if (reset) begin
             inst_reg   <= 32'b0;
@@ -270,7 +274,7 @@ module EXE(
             exception_message_reg <= 87'b0;
             inst_rdcntv_reg <= 2'b0;
             exception_state_tlb_reg <= 4'b0;
-            tlb_related_inst_reg <= 5'b0;
+            tlb_related_inst_reg <= 6'b0;
         end
         else if (ready_go_id &allow_in) begin
             inst_reg   <= inst_from_id;
@@ -301,7 +305,8 @@ module EXE(
     assign dest       = dest_reg;
     assign allow_in   = ~valid | (ready_go&&MEM_allow_in);
     assign ready_go   = valid&((!div_en_reg) | (current_state[2]&&div_result_ready) | current_state[3] | ex_stall_mem_store | vaddr_sign_from_mem | vaddr_sign_from_wb)
-    &((~mem_type)|(data_sram_addr_ok&data_sram_req)|mem_req_ready|ex_stall_mem_store | vaddr_sign_from_mem | vaddr_sign_from_wb);
+    &((~mem_type)|(data_sram_addr_ok&data_sram_req)|mem_req_ready|ex_stall_mem_store | vaddr_sign_from_mem | vaddr_sign_from_wb)
+    &((~inst_tlbsrch)|(~stall_srch_from_mem & ~stall_srch_from_wb)); //阻塞
     assign inst_exe   = inst_reg;
     assign pc_exe     = pc_reg;
     assign forward_data_exe = alu_result_without_div_mul;
@@ -430,7 +435,7 @@ module EXE(
                                           inst_syscall,              //80
                                           exception_message_reg[79:0]
                                         };
-    wire vaddr_sign_next = vaddr_sign & ~inst_invtlb_happen & ~inst_tlbsrch_happen;
+    wire vaddr_sign_next = vaddr_sign & ~inst_invtlb_happen;
 
     assign exception_state_tlb_exe = {exception_tlbr_FETCH,
                                       exception_pif,
@@ -443,7 +448,10 @@ module EXE(
                                       vaddr_sign_next
                                      };
     assign invalidtlb_happen_in_ex = inst_invtlb & valid & ~wb_ex & ~ertn_flush & ~exception_state_mem & ~ertn_mem
-                                     & ~vaddr_sign_from_mem & ~vaddr_sign_from_wb&~exception_int&~exception_adef&~exception_ine&~exception_ale&~inst_break&~inst_syscall;
+                                     & ~vaddr_sign_from_mem & ~vaddr_sign_from_wb&
+                                     (~exception_int&~exception_adef&~exception_ine&~exception_ale&~inst_break&~inst_syscall&
+                                     ~exception_tlbr_FETCH&~exception_PPI_FETCH&~exception_pif) //此前没有导致的异常
+                                     &~stall_srch_from_mem & ~stall_srch_from_wb; //前面没有在mem和wb级引起tlbsrch指令的stall
     assign inst_invtlb_happen = invalidtlb_happen_in_ex;
     //这个地方形成一个组合环
     assign inst_tlbsrch_happen = inst_tlbsrch & valid & ~wb_ex & ~ertn_flush & ~exception_state_mem & ~ertn_mem
@@ -451,7 +459,9 @@ module EXE(
     assign invalidtlb_pc = pc_reg;
 
     assign invtlb_op = {5{inst_invtlb}} & inst_exe[4:0];
-    assign tlbsrch_hit = valid & inst_tlbsrch_happen & s1_found;
+    wire tlbsrch_hit = valid & inst_tlbsrch_happen & s1_found;
+    wire [3:0] tlbsrch_index ;
     assign tlbsrch_index = s1_index;
+    assign tlbsrch_csr_message = {tlbsrch_hit, tlbsrch_index};
     assign tlb_related_inst = tlb_related_inst_reg;
 endmodule

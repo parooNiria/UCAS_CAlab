@@ -2,6 +2,7 @@
 `define CSR_DMW0      14'h0180
 `define CSR_DMW1      14'h0181
 `define CSR_ASID      14'h0018
+`define CSR_TLBEHI    14'h0011
 module ID(
     input           clk,
     input           reset,
@@ -57,7 +58,7 @@ module ID(
     //tlb相关，表示此时内部是否有一条可能改变虚实翻译的指令
     output         vaddr_sign,
     output [3:0]   exception_state_tlb,
-    output [4:0]   tlb_related_inst,
+    output [5:0]   tlb_related_inst,
     input          invalidtlb_happen_in_ex,
     input          vaddr_about_inst_happen_in_wb
 );
@@ -497,10 +498,15 @@ module ID(
     assign exception_state_tlb = {exception_tlbr_fetch, exception_pif, exception_ppi,vaddr_sign};
     //vaddr_sign表明这条指令可能改变虚实映射关系
     //通过csr改变,pg,da,dmw,asid等
+    //这个地方不太对，应为tlbsrch，rd不会改变虚实映射关系
     wire vaddr_sign_csr = csr_we &  (csr_num == `CSR_CRMD && (|csr_wmask[4:3]) || csr_num == `CSR_DMW0 || csr_num == `CSR_DMW1 || csr_num == `CSR_ASID);
-    wire vaddr_sign_tlb = inst_tlbsrch | inst_tlbrd | inst_tlbwr | inst_tlbfill | inst_invtlb;
+    wire vaddr_sign_tlb =inst_tlbwr | inst_tlbfill | inst_invtlb;
+    //但是现在会有问题是由于tlbsrch需要使用相关寄存器查询，因此要有一个标记，这条指令是否会改变所需寄存器
+    //并且此时经过考虑，发现如果在ex级写csr会产生写后写问题，因此改变写csr时机，到wb级再统一操作csr
+    wire stall_tlbsrc_write =  (csr_we & (csr_num == `CSR_ASID || csr_num == `CSR_TLBEHI)) || inst_tlbrd;
+
     assign vaddr_sign = valid & (vaddr_sign_csr | vaddr_sign_tlb);
-    assign tlb_related_inst = {inst_tlbsrch, inst_tlbrd, inst_tlbwr, inst_tlbfill, inst_invtlb};
+    assign tlb_related_inst = {stall_tlbsrc_write,inst_tlbsrch, inst_tlbrd, inst_tlbwr, inst_tlbfill, inst_invtlb};
 
     wire    csr_re;
     assign  csr_re = inst_csrrd | inst_csrwr | inst_csrxchg | inst_rdcntid_w;

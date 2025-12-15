@@ -130,7 +130,7 @@ wire [31:0] rdata1_to_exe;
 wire        div_en_to_exe;
 wire [1:0]  inst_rdcntv;
 wire [3:0]  exception_state_tlb_id;
-wire [4:0]  tlb_related_inst_id;
+wire [5:0]  tlb_related_inst_id;
 
 ID ID_PART(
     .clk            (clk            ),
@@ -208,7 +208,10 @@ wire        forward_en_from_exe;
 wire [87:0] exception_message_from_id;
 wire [32:0] timer_cnt_global_value_and_en;
 wire [8:0]  exception_state_tlb_exe;
-wire [4:0]  tlb_related_inst_exe;
+wire [5:0]  tlb_related_inst_exe;
+wire [4:0]  tlbsrch_csr_message_exe;
+wire        stall_tlbsrch_mem;
+wire        stall_tlbsrch_wb;
 EXE EXE_PART(
     .clk            (clk            ),
     .reset          (reset          ),
@@ -264,6 +267,8 @@ EXE EXE_PART(
     .vaddr_sign_from_wb(vaddr_sign_wb),
     .exception_state_tlb_exe(exception_state_tlb_exe),
     .tlb_related_inst(tlb_related_inst_exe),
+    .stall_srch_from_mem(stall_tlbsrch_mem),
+    .stall_srch_from_wb(stall_tlbsrch_wb),
     .invalidtlb_happen_in_ex(invalidtlb_happen_in_ex),
     .invalidtlb_pc(invalidtlb_pc),
     .vaddr_about_inst_happen_in_wb(vaddr_about_inst_happen_in_wb),
@@ -295,8 +300,7 @@ EXE EXE_PART(
     .crmd_plv  (crmd_plv_state  ),
     .csr_asid  (csr_asid_state  ),
     .tlbehi_vppn (tlbehi_vppn),
-    .tlbsrch_hit (tlbsrch_hit),
-    .tlbsrch_index(tlbsrch_index)
+    .tlbsrch_csr_message(tlbsrch_csr_message_exe)
 );
 
 wire ready_go_mem;
@@ -315,7 +319,8 @@ wire [87:0] exception_message_to_mem;
 wire [1:0] exception_message_from_mem; 
 wire [31:0] dram_addr;
 wire [8:0] exception_state_tlb_mem;
-wire [4:0] tlb_related_inst_mem;
+wire [5:0] tlb_related_inst_mem;
+wire [4:0] tlbsrch_csr_message_to_wb;
 MEM MEM_PART(
     .clk            (clk            ),
     .reset          (reset          ),
@@ -359,7 +364,10 @@ MEM MEM_PART(
     .vaddr_sign    (vaddr_sign_mem),
     .exception_state_tlb_exe(exception_state_tlb_exe),
     .vaddr_about_inst_happen_in_wb(vaddr_about_inst_happen_in_wb),
-    .tlb_related_inst_exe(tlb_related_inst_exe)
+    .tlb_related_inst_exe(tlb_related_inst_exe),
+    .stall_tlbsrch_mem(stall_tlbsrch_mem),
+    .tlbsrch_csr_message_from_exe(tlbsrch_csr_message_exe),
+    .tlbsrch_csr_message_to_wb(tlbsrch_csr_message_to_wb)
 );
 
 wire allow_in_wb;
@@ -373,6 +381,7 @@ wire        wb_reg_en_valid;
 assign wb_reg_en_valid = WB_valid & rf_we;
 wire [31:0] forward_data_wb;
 wire [87:0] exception_message_to_wb;
+wire inst_tlbsrch_in_wb_happen;
 WB WB_PART(
     .clk            (clk            ),
     .reset          (reset          ),
@@ -418,7 +427,12 @@ WB WB_PART(
     .wrong_addr_is_pc(wrong_addr_is_pc),
     .vaddr_sign    (vaddr_sign_wb),
     .vaddr_about_inst_happen_in_wb(vaddr_about_inst_happen_in_wb),
-    .vaddr_about_inst_pc(vaddr_about_inst_pc)
+    .vaddr_about_inst_pc(vaddr_about_inst_pc),
+    .tlbsrch_csr_message_from_mem(tlbsrch_csr_message_to_wb),
+    .tlbsrch_index (tlbsrch_index ),
+    .tlbsrch_hit   (tlbsrch_hit   ),
+    .inst_tlbsrch_in_wb_happen(inst_tlbsrch_in_wb_happen),
+    .stall_tlbsrch_wb(stall_tlbsrch_wb)
 );
 
 regfile regfile_PART(
@@ -512,7 +526,7 @@ csr csr_PART(
     .csr_dmw1_pseg_state   (csr_dmw1_pseg_state ),
     .csr_dmw1_vseg_state   (csr_dmw1_vseg_state ),
 
-    .inst_tlbsrch_happen   (tlbsrch_happen   ),
+    .inst_tlbsrch_in_wb_happen   (inst_tlbsrch_in_wb_happen   ),
     .inst_tlbrd_happen    (tlbrd_happen    ),
     .inst_tlbfill_happen   (tlbfill_happen   ),
     .inst_tlbwr_happen    (tlbwr_happen    ),

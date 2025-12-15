@@ -53,14 +53,19 @@ module WB(
     output [31:0] wb_vaddr,
     //tlb related
     input  [8:0] exception_state_tlb_mem,
-    input  [4:0] tlb_related_inst_mem,
+    input  [5:0] tlb_related_inst_mem,
     output       inst_tlbwr_happen,
     output       inst_tlbrd_happen,
     output       inst_tlbfill_happen,
     output       wrong_addr_is_pc,
     output       vaddr_sign,
     output       vaddr_about_inst_happen_in_wb,
-    output [31:0] vaddr_about_inst_pc
+    output [31:0] vaddr_about_inst_pc,
+    input  [4:0]  tlbsrch_csr_message_from_mem,
+    output [3:0]  tlbsrch_index,
+    output        tlbsrch_hit,
+    output        inst_tlbsrch_in_wb_happen,
+    output        stall_tlbsrch_wb
 );  
     //valid part
     always@(posedge clk) begin
@@ -80,7 +85,8 @@ module WB(
     reg [87:0] exception_message_reg;
     reg [31:0] vaddr_reg;
     reg [8:0]  exception_state_tlb_reg;
-    reg [4:0]  tlb_related_inst_reg;
+    reg [5:0]  tlb_related_inst_reg;
+    reg [4:0]  tlbsrch_csr_message_reg;
     always @(posedge clk) begin
         if (reset) begin
             data_reg   <= 32'b0;
@@ -89,7 +95,8 @@ module WB(
             exception_message_reg <= 83'b0;
             vaddr_reg  <= 32'b0;
             exception_state_tlb_reg <= 9'b0;
-            tlb_related_inst_reg <= 5'b0;
+            tlb_related_inst_reg <= 6'b0;
+            tlbsrch_csr_message_reg <= 5'b0;
         end
         else if (ready_go_mem &allow_in) begin
             data_reg   <= data_to_reg_from_mem;
@@ -99,6 +106,7 @@ module WB(
             vaddr_reg  <= dram_addr;
             exception_state_tlb_reg <= exception_state_tlb_mem;
             tlb_related_inst_reg <= tlb_related_inst_mem;
+            tlbsrch_csr_message_reg <= tlbsrch_csr_message_from_mem;
         end
     end
 
@@ -189,4 +197,9 @@ module WB(
     assign wb_esubcode= 9'h0;
     assign wb_vaddr   = vaddr_reg;
     assign vaddr_about_inst_pc = pc;
+    assign tlbsrch_index = tlbsrch_csr_message_reg[3:0];
+    assign tlbsrch_hit   = tlbsrch_csr_message_reg[4];
+   
+    assign stall_tlbsrch_wb = tlb_related_inst_reg[5] & valid;
+    assign inst_tlbsrch_in_wb_happen = tlb_related_inst_reg[4] & valid & ~wb_ex & ~ertn_flush & ~exception_state & ~wb_vaddr;
 endmodule

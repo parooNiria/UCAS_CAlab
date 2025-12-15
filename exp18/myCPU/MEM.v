@@ -39,10 +39,13 @@ module MEM(
     output       vaddr_sign,
     input  [8:0] exception_state_tlb_exe,
     input        vaddr_about_inst_happen_in_wb,
-    input  [4:0] tlb_related_inst_exe,
+    input  [5:0] tlb_related_inst_exe,
 
     output [8:0] exception_state_tlb,
-    output [4:0] tlb_related_inst
+    output [5:0] tlb_related_inst,
+    output       stall_tlbsrch_mem,
+    input  [4:0] tlbsrch_csr_message_from_exe,
+    output [4:0] tlbsrch_csr_message_to_wb
 );  
     //valid Part
     always @(posedge clk) begin
@@ -69,7 +72,8 @@ module MEM(
     reg [87:0] exception_message_reg;
     reg [32:0] timer_cnt_global_value_and_en_reg;
     reg [8:0]  exception_state_tlb_reg;
-    reg [4:0]  tlb_related_inst_reg;
+    reg [5:0]  tlb_related_inst_reg;
+    reg [4:0]  tlbsrch_csr_message_reg;
     always @(posedge clk) begin
         if (reset) begin
             inst_reg       <= 32'b0;
@@ -81,7 +85,8 @@ module MEM(
             exception_message_reg <= 87'b0;
             timer_cnt_global_value_and_en_reg <= 33'b0;
             exception_state_tlb_reg <= 9'b0;
-            tlb_related_inst_reg <= 5'b0;
+            tlb_related_inst_reg <= 6'b0;
+            tlbsrch_csr_message_reg <= 5'b0;
         end
         else if (ready_go_exe &allow_in) begin
             inst_reg       <= inst_from_exe;
@@ -94,6 +99,7 @@ module MEM(
             timer_cnt_global_value_and_en_reg <= timer_cnt_global_value_and_en;
             exception_state_tlb_reg <= exception_state_tlb_exe;
             tlb_related_inst_reg <= tlb_related_inst_exe;
+            tlbsrch_csr_message_reg <= tlbsrch_csr_message_from_exe;
         end
     end
     wire inst_rdcntv;
@@ -165,5 +171,7 @@ module MEM(
     
     assign vaddr_sign = valid & exception_state_tlb_reg[0];
     assign exception_state_tlb = valid ? exception_state_tlb_reg : 10'b0;
-    assign tlb_related_inst = valid ? tlb_related_inst_reg : 5'b0;
+    assign tlb_related_inst = valid ? tlb_related_inst_reg : 6'b0;
+    assign stall_tlbsrch_mem = valid & tlb_related_inst_reg[5];
+    assign tlbsrch_csr_message_to_wb = valid ? tlbsrch_csr_message_reg : 5'b0;
 endmodule

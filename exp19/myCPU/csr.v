@@ -37,7 +37,7 @@ module csr(
 
 
     //tlb instruction port
-    input  wire         inst_tlbsrch_happen,
+    input  wire         inst_tlbsrch_in_wb_happen,
     input  wire         inst_tlbrd_happen,
     input  wire         inst_tlbwr_happen,
     input  wire         inst_tlbfill_happen,
@@ -445,7 +445,7 @@ module csr(
         else if (csr_we && csr_num==`CSR_TLBIDX)
             csr_tlbidx_index <= csr_wmask[`CSR_TLBIDX_INDEX]&csr_wdata[`CSR_TLBIDX_INDEX]
                              | ~csr_wmask[`CSR_TLBIDX_INDEX]&csr_tlbidx_index;
-        else if (inst_tlbsrch_happen && tlbsrch_hit)
+        else if (inst_tlbsrch_in_wb_happen && tlbsrch_hit)
             csr_tlbidx_index <= tlbsrch_index;
     end
     //ps TLBRD改变
@@ -468,7 +468,7 @@ module csr(
         else if (csr_we && csr_num==`CSR_TLBIDX)
             csr_tlbidx_ne <= csr_wmask[`CSR_TLBIDX_NE]&csr_wdata[`CSR_TLBIDX_NE]
                           | ~csr_wmask[`CSR_TLBIDX_NE]&csr_tlbidx_ne;
-        else if (inst_tlbsrch_happen)
+        else if (inst_tlbsrch_in_wb_happen)
             csr_tlbidx_ne <= ~tlbsrch_hit;
         else if (inst_tlbrd_happen)
             csr_tlbidx_ne <= ~r_tlb_e;

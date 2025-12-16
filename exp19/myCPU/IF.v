@@ -138,14 +138,14 @@ module IF(
     wire preif_exception_pif = valid_pre_if & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s0_found & ~s0_v;
     wire preif_exception_ppi = valid_pre_if & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s0_found & s0_v & (crmd_plv > s0_plv);
     wire preif_exception_because_of_tlb = preif_exception_tlbr_fecth | preif_exception_pif | preif_exception_ppi;
-    wire preif_excepetion_adef = valid_pre_if & (preif_pc[1:0] != 2'b00);
+    wire preif_excepetion_adef = valid_pre_if & (preif_pc[1:0] != 2'b00) & ~preif_exception_because_of_tlb;
     assign inst_sram_req   = valid_pre_if & allow_in_if & ~flush & ~ertn_flush & ~wb_ex & ~vaddr_sign & ~preif_exception_because_of_tlb & ~preif_excepetion_adef;
     assign inst_sram_wr    = 1'b0;
     assign inst_sram_size  = 2'b10;
     assign inst_sram_wstrb = 4'b0;
     
     wire   pre_if_ready_go;
-    assign pre_if_ready_go = (inst_sram_addr_ok & valid_pre_if & ~flush & ~ertn_flush & ~wb_ex & ~vaddr_sign) | preif_exception_because_of_tlb | preif_excepetion_adef;
+    assign pre_if_ready_go = ((inst_sram_addr_ok| preif_exception_because_of_tlb | preif_excepetion_adef) & valid_pre_if & ~flush & ~ertn_flush & ~wb_ex & ~vaddr_sign);
 
 
 //if

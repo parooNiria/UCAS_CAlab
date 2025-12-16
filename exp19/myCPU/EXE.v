@@ -367,12 +367,12 @@ module EXE(
                             (csr_addr_mode == 1'b0) ? alu_result : //物理地址模式
                             tlb_addr_translated; //tlb地址转换
     //由此产生异常
-    wire   exception_TLBR_DATA = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & ~s1_found;
-    wire   exception_PIL = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & ~mem_st & ~s1_v;
-    wire   exception_PIS = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & mem_st & ~s1_v;
-    wire   exception_PME = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & s1_v & mem_st & (crmd_plv <= s1_plv) &!s1_d;
-    wire   exception_PPI_DATA = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & s1_v &(crmd_plv > s1_plv);
-
+    wire   exception_TLBR_DATA = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & ~s1_found & ~exception_state_before;
+    wire   exception_PIL = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & ~mem_st & ~s1_v & ~exception_state_before;
+    wire   exception_PIS = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & mem_st & ~s1_v & ~exception_state_before;
+    wire   exception_PME = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & s1_v & mem_st & (crmd_plv <= s1_plv) &!s1_d & ~exception_state_before;
+    wire   exception_PPI_DATA = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & s1_v &(crmd_plv > s1_plv) & ~exception_state_before;
+    wire   exception_tlb_exe = exception_TLBR_DATA | exception_PIL | exception_PIS | exception_PME | exception_PPI_DATA;
     assign data_sram_req    = valid&~mem_req_ready&mem_type&~ex_stall_mem_store & ~vaddr_sign_from_mem & ~vaddr_sign_from_wb;          //由异常阻止和虚实地址改变阻止
     assign data_sram_wr     = mem_st;
     assign data_sram_size   = (mem_w?2'b10:
@@ -403,10 +403,11 @@ module EXE(
     wire inst_break;
     wire inst_syscall;
     wire inst_ertn;
+    wire   exception_state_before = exception_message_reg[87];
     assign exception_int = exception_message_reg[86];
     assign exception_adef = exception_message_reg[85];
     assign exception_ine = exception_message_reg[84];
-    assign exception_ale = exception_message_reg[83]|(((mem_w & alu_result[1:0]!=2'b00)|((mem_hu|mem_h)&alu_result[0]))&~exception_adef);
+    assign exception_ale = (((mem_w & alu_result[1:0]!=2'b00)|((mem_hu|mem_h)&alu_result[0]))&~exception_state_before & ~exception_tlb_exe)&valid;
     wire   exception_tlbr_FETCH = valid & exception_state_tlb_reg[3];
     wire   exception_pif = exception_state_tlb_reg[2];
     wire   exception_PPI_FETCH = exception_state_tlb_reg[1];
@@ -448,9 +449,7 @@ module EXE(
                                       vaddr_sign_next
                                      };
     assign invalidtlb_happen_in_ex = inst_invtlb & valid & ~wb_ex & ~ertn_flush & ~exception_state_mem & ~ertn_mem
-                                     & ~vaddr_sign_from_mem & ~vaddr_sign_from_wb&
-                                     (~exception_int&~exception_adef&~exception_ine&~exception_ale&~inst_break&~inst_syscall&
-                                     ~exception_tlbr_FETCH&~exception_PPI_FETCH&~exception_pif) //此前没有导致的异常
+                                     & ~vaddr_sign_from_mem & ~vaddr_sign_from_wb& ~exception_state_before
                                      &~stall_srch_from_mem & ~stall_srch_from_wb; //前面没有在mem和wb级引起tlbsrch指令的stall
     assign inst_invtlb_happen = invalidtlb_happen_in_ex;
     //这个地方形成一个组合环

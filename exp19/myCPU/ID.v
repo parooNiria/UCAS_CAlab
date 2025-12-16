@@ -425,17 +425,17 @@ module ID(
     assign dest = dst_is_r1 ? 5'd1 
                   : dst_is_rj ? rj
                   : rd;
-    assign reg_en = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu
+    assign reg_en = (~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu
                      & ~inst_st_b & ~inst_st_h & ~inst_ertn & ~inst_syscall
-                     & ~inst_tlbsrch & ~inst_tlbrd & ~inst_tlbwr & ~inst_tlbfill & ~inst_invtlb;
-    assign mem_en = {5{inst_st_w}}  & 5'b10011 |
+                     & ~inst_tlbsrch & ~inst_tlbrd & ~inst_tlbwr & ~inst_tlbfill & ~inst_invtlb)&~exception_state;
+    assign mem_en = {{5{inst_st_w}}  & 5'b10011 |
                     {5{inst_st_b}}  & 5'b10001 |
                     {5{inst_st_h}}  & 5'b10010 |
                     {5{inst_ld_w}}  & 5'b11011 |
                     {5{inst_ld_b}}  & 5'b11001 |
                     {5{inst_ld_h}}  & 5'b11010 |
                     {5{inst_ld_bu}} & 5'b11101 |
-                    {5{inst_ld_hu}} & 5'b11110 ;
+                    {5{inst_ld_hu}} & 5'b11110 } & {5{~exception_state}};
     assign src1 = src1_is_pc ? pc_reg : rj_value;
     assign src2 = src2_is_imm ? imm : rkd_value;
     assign rdata1_to_exe = rj_value;
@@ -509,9 +509,9 @@ module ID(
     assign tlb_related_inst = {stall_tlbsrc_write,inst_tlbsrch, inst_tlbrd, inst_tlbwr, inst_tlbfill, inst_invtlb};
 
     wire    csr_re;
-    assign  csr_re = inst_csrrd | inst_csrwr | inst_csrxchg | inst_rdcntid_w;
+    assign  csr_re =inst_csrrd | inst_csrwr | inst_csrxchg | inst_rdcntid_w;
     wire    csr_we;
-    assign  csr_we = inst_csrwr | inst_csrxchg;
+    assign  csr_we = (inst_csrwr | inst_csrxchg)&~exception_state;
     wire    [31:0] csr_wmask;
     assign  csr_wmask = {32{inst_csrxchg}} & rj_value | {32{inst_csrwr}};
     wire    [13:0] csr_num;

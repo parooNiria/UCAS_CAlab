@@ -14,5 +14,5 @@ exp23/soc_verify/
 exp17/rtl/
 exp17/run_vivado/
 exp17/rtl/xilinx_ip/clk_pll.xci
-exp20\run_vivado
-exp20\rtl
+exp20/run_vivado/
+exp20/rtl/

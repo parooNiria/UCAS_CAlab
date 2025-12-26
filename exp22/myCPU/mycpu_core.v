@@ -775,7 +775,7 @@ cache icache(
     .ret_valid(icache_ret_valid         ),
     .ret_last (icache_ret_last          ),
     .ret_data (icache_ret_data          ),
-    .mem_type     (2'b01),
+    .mem_type     (mem_type_if),
 
 
     .wr_req (icache_wr_req              ),

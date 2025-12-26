@@ -16,6 +16,9 @@ module EXE(
     input [31:0]    rdata2_from_id,
     input [31:0]    rdata1_from_id,
     input [1:0]     inst_rdcntv,
+    input           cacop_inst_in_id,
+    output          cacop_inst_in_exe,
+    output          cacop_finish_in_exe,
     //to MEM
     output          ready_go,
     input           MEM_allow_in,
@@ -99,7 +102,14 @@ module EXE(
     input  [9:0]  csr_asid,
     input  [18:0]  tlbehi_vppn,
     input          csr_addr_mode,
-    input  [1:0]   datm_csr
+    input  [1:0]   datm_csr,
+
+    output [1:0] cacop_op,
+    output       cacop_req_icache,
+    output       cacop_req_dcache,
+    output  [31:0] cache_va,
+    input   cacop_finish_icache,
+    input   cacop_finish_dcache 
 );
     always @(posedge clk) begin
         if (reset) begin
@@ -115,6 +125,44 @@ module EXE(
             valid <= 1'b0;
         end
     end
+    reg inst_cacop_reg;
+    always @(posedge clk) begin
+        if(reset) begin
+            inst_cacop_reg <= 1'b0;
+        end
+        else if(ready_go_id &allow_in) begin
+            inst_cacop_reg <= cacop_inst_in_id;
+        end 
+        else if(cacop_finish_in_exe) begin
+            inst_cacop_reg <= 1'b0;
+        end
+    end
+    assign cacop_inst_in_exe = inst_cacop_reg & valid;
+    reg    icache_cacop_finish_reg;
+    reg    dcache_cacop_finish_reg;
+    always @(posedge clk) begin
+        if(reset) begin
+            icache_cacop_finish_reg <= 1'b0;
+        end
+        else if(ready_go_id & allow_in) begin
+            icache_cacop_finish_reg <= 1'b0;
+        end
+        else if(cacop_finish_icache) begin
+            icache_cacop_finish_reg <= 1'b1;
+        end
+    end
+    always @(posedge clk) begin
+        if(reset) begin
+            dcache_cacop_finish_reg <= 1'b0;
+        end
+        else if(ready_go_id & allow_in) begin
+            dcache_cacop_finish_reg <= 1'b0;
+        end
+        else if(cacop_finish_dcache) begin
+            dcache_cacop_finish_reg <= 1'b1; 
+        end
+    end
+    assign 
     wire inst_rdcntvh_w = inst_rdcntv_reg[1];
     wire inst_rdcntvl_w = inst_rdcntv_reg[0];
     reg [63:0] timer_cnt_global;

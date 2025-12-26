@@ -32,7 +32,13 @@ module cache(
     output wire [ 3:0] wr_wstrb,  // 写操作字节掩码，仅在 WRITE_BYTE, WRITE_HALFWORD, WRITE_WORD下有意义
     output wire [127:0] wr_data, // 写数据
 
-    input  wire        wr_rdy    // 写请求能否被接收的握手信号
+    input  wire        wr_rdy,    // 写请求能否被接收的握手信号
+
+    //cacop接口
+    input  wire        cacop_req,
+    output wire        cacop_finish,
+    input  wire [1:0]  cacop_op,
+    input  wire [31:0] cacop_va
     );
 //在cache中有四种信号，根据状态机理解，hitwrite是单独的操作（请务必理解这个地方的每一句话）
 
@@ -131,6 +137,20 @@ wire [31:0] data_w1_rdata[3:0];
 wire        data_w0_en[3:0], data_w1_en[3:0];
 wire [ 3:0] data_w0_we[3:0], data_w1_we[3:0];
 
+//cacop相关信号
+wire cacop_store_tag;
+wire cacop_Index_Invalidate;
+wire cacop_Hit_Invalidate;
+assign cacop_store_tag = (cacop_op == 2'b00) && cacop_req;
+assign cacop_Index_Invalidate = (cacop_op == 2'b01) && cacop_req;
+assign cacop_Hit_Invalidate = (cacop_op == 2'b10) && cacop_req;
+
+wire cacop_store_tag_valid;
+wire cacop_Index_Invalidate_valid;
+wire cacop_Hit_Invalidate_valid;
+assign cacop_store_tag_valid = cacop_store_tag && (current_state == IDLE) && (writebuf_cstate == WRITEBUF_IDLE);
+assign cacop_Index_Invalidate_valid = cacop_Index_Invalidate && (current_state == IDLE) && (writebuf_cstate == WRITEBUF_IDLE);
+assign cacop_Hit_Invalidate_valid = cacop_Hit_Invalidate && (current_state == IDLE) && (writebuf_cstate == WRITEBUF_IDLE);
 
 tagv_ram tagv_way0(
     .addra(tagv_addr),
@@ -250,6 +270,7 @@ reg [31:0] write_data; //写入的数据
 //request buffer用于存储当前的请求信息
 //看一眼接口信号（请一定要看）
 //包括op,index,tag,offset,wstrb,wdata
+reg        reg_valid;
 reg        reg_op;
 reg [ 7:0] reg_index;
 reg [19:0] reg_tag;
@@ -267,6 +288,8 @@ wire       uncache_type;
 wire        way0_v, way1_v;
 wire [19:0] way0_tag, way1_tag;
 wire        way0_hit, way1_hit;
+wire        way0_hit_cacop,way1_hit_cacop;
+wire        cache_hit_cacop;
 wire        cache_hit;
 
 assign {way0_tag, way0_v} = tagv_w0_rdata;
@@ -274,6 +297,9 @@ assign {way1_tag, way1_v} = tagv_w1_rdata;
 assign way0_hit = (way0_tag == reg_tag) && way0_v && (~uncache_type);
 assign way1_hit = (way1_tag == reg_tag) && way1_v && (~uncache_type);
 assign cache_hit = way0_hit || way1_hit;
+assign way0_hit_cacop = (way0_tag == reg_tag) && way0_v;
+assign way1_hit_cacop = (way1_tag == reg_tag) && way1_v;
+assign cache_hit_cacop = way0_hit_cacop || way1_hit_cacop;
 
 //DATA select parts
 //这个选出需要返回给cpu的数据，和选出需要执行replace时送入data ram的数据
@@ -333,6 +359,9 @@ assign conflict_load_same_addr =    (current_state == LOOKUP) &
 wire replace_part_is_dirty;
 assign replace_part_is_dirty = (replace_way == 1'b0) && dirty_way0[reg_index] 
                             || (replace_way == 1'b1) && dirty_way1[reg_index];
+wire cacop_part_is_dirty;
+assign cacop_part_is_dirty =  (cacop_Hit_Invalidate & ((way0_hit_cacop & dirty_way0[reg_index])|(way1_hit_cacop & dirty_way1[reg_index]))) |
+                             (cacop_Index_Invalidate & (cacop_va[0] ?dirty_way0[cacop_va[11:4]] : dirty_way1[cacop_va[11:4]]));
 
 always @(posedge clk) begin
     if (reset) begin
@@ -345,7 +374,9 @@ end
 always @(*) begin
     case (current_state)
         IDLE: begin  //当处于IDLE，如果此时有请求，且不与write_buffer冲突，转入LOOKUP
-            if(valid & ~conflict_writing) begin
+                     //对于cacop，现转入LOOKUP态，再处理，storetag直接处理就可以了
+                     //这个地方需要指出，只有当writebuf处于IDLE时，才能转入LOOKUP
+            if((valid & ~conflict_writing)|| (cacop_Hit_Invalidate_valid | cacop_Index_Invalidate_valid)) begin
                 next_state = LOOKUP;
             end else begin
                 next_state = IDLE;
@@ -353,7 +384,12 @@ always @(*) begin
         end
         LOOKUP: begin //cache hit时,如果此时没有冲突，有请求继续LOOKUP，否则IDLE
                       //cache miss时，转入MISS态即可
-            if(~cache_hit)
+                      //对于cacop，到这个状态得到对应的tagv数据后，如果是dirty，转入miss态，否则转回IDLE
+            if(~reg_valid & cacop_part_is_dirty)
+                next_state = MISS;
+            else if(~reg_valid & ~cacop_part_is_dirty)
+                next_state = IDLE;
+            else if(~cache_hit & reg_valid) 
                 next_state = MISS;
             else if((~valid) || conflict_writing || conflict_load_same_addr)
                 next_state = IDLE;
@@ -363,7 +399,8 @@ always @(*) begin
         MISS: begin  //当处于MISS态时，需要等待wr_rdy为高，方便一进入就对其进行写回操作
                      //这个地方还有一个问题，就是如果替换的块是干净的，就不需要写回，直接REPLACE
                      //对于uncache的情况，也是直接REPLACE（此处未实现）
-            if((((wr_rdy == 1) || ~replace_part_is_dirty) && ~uncache_type) || (uncache_type && wr_rdy == 1))
+            if((((((wr_rdy == 1) || ~replace_part_is_dirty) && ~uncache_type) || (uncache_type && wr_rdy == 1))&reg_valid)
+                || (~reg_valid &&wr_rdy == 1))
                 next_state = REPLACE;
             else
                 next_state = MISS;
@@ -371,7 +408,9 @@ always @(*) begin
         REPLACE: begin  //处于这个状态，需要把对应脏块写回，并发出读请求
                         //由于是在wr_rdy == 1时进入的这个状态，因此如果要写回脏块一定可以立刻满足
                         //uncache的写可以直接写然后返回
-            if(uncache_type && (reg_op == WRITE))
+            if(~reg_valid)
+                next_state = IDLE;
+            else if(uncache_type && (reg_op == WRITE))
                 next_state = IDLE;
             else if(rd_rdy == 1)
                 next_state = REFILL;
@@ -399,7 +438,7 @@ end
 always @(*) begin
     case (writebuf_cstate)
         WRITEBUF_IDLE:begin  //处于LOOKUP,cache写命中转入写状态
-            if((current_state == LOOKUP) && (reg_op == WRITE) && cache_hit)
+            if((current_state == LOOKUP) && (reg_op == WRITE) && cache_hit && reg_valid)
                 writebuf_nstate = WRITEBUF_WRITE;
             else
                 writebuf_nstate = WRITEBUF_IDLE;
@@ -427,8 +466,12 @@ assign lookup_ram_en = ((current_state == IDLE) && (valid & ~conflict_writing)) 
 //以及为什么一定要多定义一个信号的原因
 
 assign hitwrite = (writebuf_cstate == WRITEBUF_WRITE);
-assign replace = (current_state == MISS) && 
+assign replace = (current_state == MISS) && (reg_valid) &&
                  ((wr_rdy == 1) || (~replace_part_is_dirty));
+wire   replace_cacop;
+assign replace_cacop = (current_state == MISS) && (~reg_valid) && (wr_rdy == 1);
+wire   cacop_invalid_way;
+assign cacop_invalid_way = ((cacop_Index_Invalidate | cacop_store_tag) & (cacop_va[0]));
 //这个地方的refill就有一点麻烦，按照书上的设计，应该用于更新data数据和tagv数据
 //但是现在分为4个bank进行存储，因此此处的refill信号只能表示当前处于refill状态，具体更新哪个bank
 //还需要临时决定
@@ -444,7 +487,8 @@ always @(posedge clk) begin
         reg_wstrb  <= 4'b0;
         reg_wdata  <= 32'b0;
         reg_mem_type <= 2'b0;
-    end else if(lookup) begin
+        reg_valid  <= 1'b0;
+    end else if(lookup || (cacop_Hit_Invalidate_valid | cacop_Index_Invalidate_valid)) begin
         reg_op     <= op;
         reg_index  <= index;
         reg_tag    <= tag;
@@ -452,6 +496,7 @@ always @(posedge clk) begin
         reg_wstrb  <= wstrb;
         reg_wdata  <= wdata;
         reg_mem_type <= mem_type;
+        reg_valid  <= 1'b1; 
     end
 end
 assign uncache_type = (reg_mem_type == 2'b00);
@@ -492,6 +537,24 @@ always @(posedge clk)begin
         dirty_way0 <= 256'b0;
         dirty_way1 <= 256'b0;
     end
+    else if(cacop_store_tag_valid)begin
+        if(~cacop_va[0])
+            dirty_way0[cacop_va[11:4]] <= 1'b0;
+        else
+            dirty_way1[cacop_va[11:4]] <= 1'b0;
+    end
+    else if(current_state == LOOKUP && ~reg_valid && cacop_Index_Invalidate)begin
+        if(~cacop_va[0])
+            dirty_way0[cacop_va[11:4]] <= 1'b0;
+        else 
+            dirty_way1[cacop_va[11:4]] <= 1'b0;
+    end
+    else if(current_state == LOOKUP && ~reg_valid &&cacop_Hit_Invalidate &&cache_hit_cacop) begin
+        if(way0_hit_cacop)
+            dirty_way[reg_index] <= 1'b0;
+        else 
+            dirty_way[reg_index] <= 1'b0; 
+    end
     else if(hitwrite)begin
         if(way0_hit)
             dirty_way0[write_index] <= 1'b1;
@@ -509,14 +572,28 @@ end
 //{tag,v}表的操作
 //在lookup,replace时读，在refill时写，可以重复写多次，也可以就在replace切到refill时写一次
 //采取后一种实现,在最后一个数返回时写一次就够
-assign tagv_addr = {8{lookup_ram_en}} & index |
+assign tagv_addr =  {8{(cacop_store_tag | cacop_Index_Invalidate)&~reg_valid} & cacop_va[11:4]} |
+                    {8{cacop_Hit_Invalidate & ~reg_valid} & reg_index} |
+                    {8{lookup_ram_en}} & index |
                     {8{replace}} & reg_index |
                     {8{refill}} & reg_index;
-assign tagv_wdata = {reg_tag, 1'b1}; //写入时有效位为1
-assign tagv_w0_en = lookup_ram_en || ((replace || refill)) && (replace_way == 1'b0);
-assign tagv_w1_en = lookup_ram_en || ((replace || refill)) && (replace_way == 1'b1);
-assign tagv_w0_we = refill&& (replace_way == 1'b0)&& ret_valid && ret_last && (~uncache_type);
-assign tagv_w1_we = refill&& (replace_way == 1'b1)&& ret_valid && ret_last && (~uncache_type);
+assign tagv_wdata = {21{refill}} & {reg_tag, 1'b1};
+assign tagv_w0_en = lookup_ram_en || ((replace || refill)) && (replace_way == 1'b0)
+                    || (cacop_store_tag_valid | cacop_Hit_Invalidate_valid | cacop_Index_Invalidate_valid) //IDLE时，store tag写，另外两个读
+                    || (current_state == LOOKUP && ~reg_valid && ~cacop_invalid_way && cacop_Index_Invalidate)
+                    || (current_state == LOOKUP && ~reg_valid && way0_hit_cacop && cacop_Hit_Invalidate);  //LOOKUP时，修改为无效
+assign tagv_w1_en = lookup_ram_en || ((replace || refill)) && (replace_way == 1'b1)
+                    || (cacop_store_tag_valid | cacop_Hit_Invalidate_valid | cacop_Index_Invalidate_valid)
+                    || (current_state == LOOKUP && ~reg_valid && cacop_invalid_way && cacop_Index_Invalidate)
+                    || (current_state == LOOKUP && ~reg_valid && way1_hit_cacop && cacop_Hit_Invalidate);
+assign tagv_w0_we = refill&& (replace_way == 1'b0)&& ret_valid && ret_last && (~uncache_type)
+                    || (cacop_store_tag_valid && ~cacop_invalid_way)
+                    || (current_state == LOOKUP && ~reg_valid && ~cacop_invalid_way && cacop_Index_Invalidate)
+                    || (current_state == LOOKUP && ~reg_valid && way0_hit_cacop && cacop_Hit_Invalidate);  
+assign tagv_w1_we = refill&& (replace_way == 1'b1)&& ret_valid && ret_last && (~uncache_type)
+                     || (cacop_store_tag_valid && cacop_invalid_way)
+                     || (current_state == LOOKUP && ~reg_valid && cacop_invalid_way && cacop_Index_Invalidate)
+                     || (current_state == LOOKUP && ~reg_valid && way1_hit_cacop && cacop_Hit_Invalidate);
 
 //data表的操作
 //在lookup,replace时读，在hitwrite,refill时写
@@ -527,35 +604,43 @@ assign tagv_w1_we = refill&& (replace_way == 1'b1)&& ret_valid && ret_last && (~
 assign data_w0_en[0] =  lookup_ram_en && (offset[3:2] == 2'b00) ||
                         hitwrite && (write_bank == 2'b00) && (write_way == 1'b0) ||
                         (replace) && (replace_way == 1'b0) ||
-                        refill && (replace_way == 1'b0)&& (~uncache_type); //这个地方讲道理应该是当对应bank数据返回再片选，但是也可以一直片选，不是对应路就读，也没有什么额外的问题
+                        refill && (replace_way == 1'b0)&& (~uncache_type)
+                        || (replace_cacop); //这个地方讲道理应该是当对应bank数据返回再片选，但是也可以一直片选，不是对应路就读，也没有什么额外的问题
 assign data_w0_en[1] =  lookup_ram_en && (offset[3:2] == 2'b01) ||
                         hitwrite && (write_bank == 2'b01) && (write_way == 1'b0) ||
                         (replace) && (replace_way == 1'b0) ||
-                        refill && (replace_way == 1'b0)&& (~uncache_type);
+                        refill && (replace_way == 1'b0)&& (~uncache_type)
+                        || (replace_cacop);
 assign data_w0_en[2] =  lookup_ram_en && (offset[3:2] == 2'b10) ||
                         hitwrite && (write_bank == 2'b10) && (write_way == 1'b0) ||
                         (replace) && (replace_way == 1'b0) ||
-                        refill && (replace_way == 1'b0)&& (~uncache_type);
+                        refill && (replace_way == 1'b0)&& (~uncache_type)
+                        || (replace_cacop);
 assign data_w0_en[3] =  lookup_ram_en && (offset[3:2] == 2'b11) ||
                         hitwrite && (write_bank == 2'b11) && (write_way == 1'b0) ||
                         (replace) && (replace_way == 1'b0) ||
-                        refill && (replace_way == 1'b0) && (~uncache_type);
+                        refill && (replace_way == 1'b0) && (~uncache_type)
+                        || (replace_cacop);
 assign data_w1_en[0] =  lookup_ram_en && (offset[3:2] == 2'b00) ||
                         hitwrite && (write_bank == 2'b00) && (write_way == 1'b1) ||
                         (replace) && (replace_way == 1'b1) ||
-                        refill && (replace_way == 1'b1) && (~uncache_type);
+                        refill && (replace_way == 1'b1) && (~uncache_type)
+                        || (replace_cacop);
 assign data_w1_en[1] =  lookup_ram_en && (offset[3:2] == 2'b01) ||
                         hitwrite && (write_bank == 2'b01) && (write_way == 1'b1) ||
                         (replace) && (replace_way == 1'b1) ||
-                        refill && (replace_way == 1'b1) && (~uncache_type);
+                        refill && (replace_way == 1'b1) && (~uncache_type)
+                        || (replace_cacop);
 assign data_w1_en[2] =  lookup_ram_en && (offset[3:2] == 2'b10) ||
                         hitwrite && (write_bank == 2'b10) && (write_way == 1'b1) ||
                         (replace) && (replace_way == 1'b1) ||
-                        refill && (replace_way == 1'b1) && (~uncache_type);
+                        refill && (replace_way == 1'b1) && (~uncache_type)
+                        || (replace_cacop);
 assign data_w1_en[3] =  lookup_ram_en && (offset[3:2] == 2'b11) ||
                         hitwrite && (write_bank == 2'b11) && (write_way == 1'b1) ||
                         (replace) && (replace_way == 1'b1) ||
-                        refill && (replace_way == 1'b1) && (~uncache_type);
+                        refill && (replace_way == 1'b1) && (~uncache_type)
+                        || (replace_cacop);
 //这个地方的we是一个四位信号，兼具表示是读写操作和写使能的作用
 assign data_w0_we[0] = {4{hitwrite && (write_bank == 2'b00) && (write_way == 1'b0)}} & write_strb |
                         {4{refill && (replace_way == 1'b0) && ret_valid && miss_return_count == 2'b00}} & 4'b1111;
@@ -630,35 +715,53 @@ reg wr_req_reg;
 always @(posedge clk) begin
     if (reset) begin
         wr_req_reg <= 1'b0;
-    end else if (current_state == MISS && next_state == REPLACE && (replace_part_is_dirty||uncache_type) && ~(uncache_type && (reg_op == READ))) begin
+    end else if (current_state == MISS && next_state == REPLACE && 
+    ((reg_valid && (replace_part_is_dirty||uncache_type) && ~(uncache_type && (reg_op == READ)))
+    ||(~reg_valid))) begin
         wr_req_reg <= 1'b1;
     end else if(wr_rdy)begin
         wr_req_reg <= 1'b0;
     end
 end
+reg [19:0] reg_cacop_tag; //由于在LOOKUP时，会将tag清零，因此需要保存写回的tag
+always @(posedge clk) begin
+    if(reset)
+        reg_cacop_tag <= 20'b0;
+    else if(cacop_va[0])
+        reg_cacop_tag <= tagv_w1_rdata[20:1];
+    else if(cacop_va[1])
+        reg_cacop_tag <= tagv_w0_rdata[20:1];
+end
 assign wr_req = wr_req_reg;
-assign wr_type = {3{~uncache_type && reg_op}} & WRITE_BLOCK
-                |{3{ uncache_type}} & WRITE_WORD; 
-assign wr_addr = {32{uncache_type}} & {reg_tag, reg_index, reg_offset}
-                |{32{~uncache_type}} &
+assign wr_type = {3{~uncache_type && reg_op && reg_valid}} & WRITE_BLOCK
+                |{3{ uncache_type && reg_valid}} & WRITE_WORD
+                |{3{~reg_valid} & WRITE_BLOCK }; 
+assign wr_addr = {32{uncache_type & reg_valid}} & {reg_tag, reg_index, reg_offset}
+                |{32{~uncache_type & reg_valid}} &
                 ({32{replace_way == 1'b0}} & {way0_tag, reg_index, 4'b0000} |
-                 {32{replace_way == 1'b1}} & {way1_tag, reg_index, 4'b0000});
-assign wr_wstrb = {4{ uncache_type}} & reg_wstrb
-                | {4{~uncache_type}} &4'b1111; 
-assign wr_data = {128{uncache_type}} & {96'b0, reg_wdata}
-                |{128{~uncache_type}} &
+                 {32{replace_way == 1'b1}} & {way1_tag, reg_index, 4'b0000})
+                | {32{~reg_valid & cacop_Index_Invalidate}} & {reg_cacop_tag,cacop_va[11:4],4'b0000}
+                | {32{~reg_valid & cacop_Hit_Invalidate}} & {cacop_va[31:4],4'b0000};
+assign wr_wstrb = {4{ uncache_type & reg_valid}} & reg_wstrb
+                | {4{~uncache_type & reg_valid}} &4'b1111; 
+                | {4{~reg_valid}} & 4'b1111;
+assign wr_data = {128{uncache_type & reg_valid}} & {96'b0, reg_wdata}
+                |{128{~uncache_type & reg_valid}} &
                 ({128{replace_way == 1'b0}} & way0_data |
-                 {128{replace_way == 1'b1}} & way1_data);
+                 {128{replace_way == 1'b1}} & way1_data) 
+                | {128{~reg_valid}} & 
+                (cacop_va[0] ? way1_data : way0_data);
 //cpu接口信号
 //此处有一个问题，就是如果addr_ok依赖于valid，那么在cpu内存应该注意req的发出不能依赖于addr_ok;
 //这个地方addr_ok不用改变
 assign addr_ok = (current_state == IDLE) && valid && (~conflict_writing)||
                 (current_state == LOOKUP) && cache_hit && valid && (~conflict_writing & ~conflict_load_same_addr);
 //这个地方data_ok,对于读操作的uncache，最后refill拉高，对于写操作的uncache，在进入REPLACE时拉高
-assign data_ok = (current_state == LOOKUP) && (cache_hit || (reg_op == WRITE && ~uncache_type)) ||
-                (current_state == REPLACE) && (reg_op == WRITE && uncache_type) ||
+assign data_ok = (current_state == LOOKUP) && (cache_hit || (reg_op == WRITE && ~uncache_type)) &&reg_valid ||
+                (current_state == REPLACE) && (reg_op == WRITE && uncache_type&& reg_valid) ||
                 (current_state == REFILL) && ret_valid && ((miss_return_count == reg_offset[3:2] && ~uncache_type)|| (ret_last && uncache_type)) && (reg_op == READ);
 //此处有一个细节，就是store操作即使不命中，也是直接data_ok拉高
 //这样当refill时，只有读才需要拉高data_ok
 assign rdata = load_data;
+
 endmodule

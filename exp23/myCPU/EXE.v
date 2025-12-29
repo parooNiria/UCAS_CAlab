@@ -107,10 +107,11 @@ module EXE(
     output [1:0] cacop_op,
     output       cacop_req_icache,
     output       cacop_req_dcache,
-    output  [31:0] cache_va,
+    output  [31:0] cacop_va,
     input   cacop_finish_icache,
     input   cacop_finish_dcache 
-);
+);  
+    wire stall_inst_effect;
     always @(posedge clk) begin
         if (reset) begin
             valid <= 1'b0;
@@ -133,7 +134,7 @@ module EXE(
         else if(ready_go_id &allow_in) begin
             inst_cacop_reg <= cacop_inst_in_id;
         end 
-        else if(cacop_finish_in_exe) begin
+        else if(cacop_finish_in_exe || wb_ex) begin
             inst_cacop_reg <= 1'b0;
         end
     end
@@ -162,7 +163,12 @@ module EXE(
             dcache_cacop_finish_reg <= 1'b1; 
         end
     end
-    assign 
+    wire   cacop_Hit_tlb_exception;
+    assign cacop_finish_in_exe = (icache_cacop_finish_reg & dcache_cacop_finish_reg) & inst_cacop_reg & valid;
+    assign cacop_op = inst_reg[4:3];
+    assign cacop_va = alu_result;
+    assign cacop_req_icache = cacop_inst_in_exe & (~icache_cacop_finish_reg) & ~stall_inst_effect & ~cacop_Hit_tlb_exception;
+    assign cacop_req_dcache = cacop_inst_in_exe & (~dcache_cacop_finish_reg) & ~stall_inst_effect & ~cacop_Hit_tlb_exception;
     wire inst_rdcntvh_w = inst_rdcntv_reg[1];
     wire inst_rdcntvl_w = inst_rdcntv_reg[0];
     reg [63:0] timer_cnt_global;
@@ -360,7 +366,8 @@ module EXE(
     assign allow_in   = ~valid | (ready_go&&MEM_allow_in && ~invalidtlb_happen_in_ex);
     assign ready_go   = valid&((!div_en_reg) | (current_state[2]&&div_result_ready) | current_state[3] | ex_stall_mem_store | vaddr_sign_from_mem | vaddr_sign_from_wb)
     &((~mem_type)|(data_sram_addr_ok&data_sram_req)|mem_req_ready|ex_stall_mem_store | vaddr_sign_from_mem | vaddr_sign_from_wb)
-    &((~inst_tlbsrch)|(~stall_srch_from_mem & ~stall_srch_from_wb)); //阻塞
+    &((~inst_tlbsrch)|(~stall_srch_from_mem & ~stall_srch_from_wb))
+    & (~inst_cacop_reg || cacop_Hit_tlb_exception); //阻塞
     assign inst_exe   = inst_reg;
     assign pc_exe     = pc_reg;
     assign forward_data_exe = alu_result_without_div_mul;
@@ -425,13 +432,16 @@ module EXE(
                          (csr_addr_mode == 1'b0) ? datm_csr : //物理地址模式
                          s1_mat; //tlb地址转换
     assign data_addr_vrtl = alu_result[11:0];
+    wire cacop_Hit_Invalidate;
+    assign cacop_Hit_Invalidate = (cacop_op == 2'b10) && (inst_cacop_reg) && valid;
     //由此产生异常
-    wire   exception_TLBR_DATA = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & ~s1_found & ~exception_state_before;
-    wire   exception_PIL = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & ~mem_st & ~s1_v & ~exception_state_before;
+    wire   exception_TLBR_DATA = valid & (mem_type || cacop_Hit_Invalidate) & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & ~s1_found & ~exception_state_before;
+    wire   exception_PIL = valid & (mem_type || cacop_Hit_Invalidate) & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & ~mem_st & ~s1_v & ~exception_state_before;
     wire   exception_PIS = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & mem_st & ~s1_v & ~exception_state_before;
     wire   exception_PME = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & s1_v & mem_st & (crmd_plv <= s1_plv) &!s1_d & ~exception_state_before;
-    wire   exception_PPI_DATA = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & s1_v &(crmd_plv > s1_plv) & ~exception_state_before;
+    wire   exception_PPI_DATA = valid & (mem_type || cacop_Hit_Invalidate) & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & s1_v &(crmd_plv > s1_plv) & ~exception_state_before;
     wire   exception_tlb_exe = exception_TLBR_DATA | exception_PIL | exception_PIS | exception_PME | exception_PPI_DATA;
+    assign cacop_Hit_tlb_exception = exception_TLBR_DATA | exception_PPI_DATA | exception_PIL;
     assign data_sram_req    = valid&~mem_req_ready&mem_type&~ex_stall_mem_store & ~vaddr_sign_from_mem & ~vaddr_sign_from_wb;          //由异常阻止和虚实地址改变阻止
     assign data_sram_wr     = mem_st;
     assign data_sram_size   = (mem_w?2'b10:
@@ -522,4 +532,6 @@ module EXE(
     assign tlbsrch_index = s1_index;
     assign tlbsrch_csr_message = {tlbsrch_hit, tlbsrch_index};
     assign tlb_related_inst = tlb_related_inst_reg;
+    assign stall_inst_effect = exception_state_exe_now | vaddr_sign_from_mem | vaddr_sign_from_wb | wb_ex | ertn_flush
+                              | exception_state_mem | ertn_mem;
 endmodule

@@ -68,8 +68,10 @@ module IF(
     input  wire        vaddr_about_inst_happen_in_wb,       //此处是应该能做一些优化的，比如不是每一级都接受下面所有级的信号，而是一级一级向上传递，但是由于对于性能没有什么要求
                                                            //暂且就这样实现，主要是这样的扩展性是比较好的
     input  wire [31:0] invalidtlb_pc,
-    input  wire [31:0] vaddr_about_inst_pc    //对于标记重取法的下一条指令都是产生标记的指令pc + 4,此时需要对应的pc送入IF级重新取指
-
+    input  wire [31:0] vaddr_about_inst_pc,    //对于标记重取法的下一条指令都是产生标记的指令pc + 4,此时需要对应的pc送入IF级重新取指
+    input              cacop_finish_in_exe,
+    input              cacop_inst_in_id,
+    input              cacop_inst_in_exe
 );  
     reg    valid_pre_if;
 //pre-if
@@ -98,7 +100,7 @@ module IF(
     //开机逻辑结束
     wire vaddr_sign = vaddr_sign_from_id | vaddr_sign_from_ex | vaddr_sign_from_mem | vaddr_sign_from_wb;
     wire cancel_because_of_vaddr = invalidtlb_happen_in_ex | vaddr_about_inst_happen_in_wb;
-
+    wire stall_because_of_cacop = cacop_inst_in_exe | cacop_inst_in_id;
     always @(posedge clk) begin
         if (reset) begin
             preif_pc <= 32'h1c000000;
@@ -107,11 +109,11 @@ module IF(
             preif_pc <= next_preif_pc;
         end
     end    //对于标记重取法的下一条指令都是产生标记的指令pc + 4
-    assign preif_pc_update = (((inst_sram_addr_ok&inst_sram_req) | wb_ex | ertn_flush | flush | vaddr_about_inst_happen_in_wb | invalidtlb_happen_in_ex) & valid_pre_if);
+    assign preif_pc_update = (((inst_sram_addr_ok&inst_sram_req)| cacop_finish_in_exe | wb_ex | ertn_flush | flush | vaddr_about_inst_happen_in_wb | invalidtlb_happen_in_ex) & valid_pre_if);
     assign next_preif_pc = wb_ex ? ex_entry :
                            ertn_flush ? ertn_entry :
                             vaddr_about_inst_happen_in_wb ? (vaddr_about_inst_pc + 4) :
-                            invalidtlb_happen_in_ex ? (invalidtlb_pc + 4) :
+                            (invalidtlb_happen_in_ex || cacop_finish_in_exe) ? (invalidtlb_pc + 4) :
                            flush ? newpc :
                            preif_pc + 4;
     //这个地方需要予以改变适应地址翻译模式
@@ -150,7 +152,7 @@ module IF(
     wire preif_exception_ppi = valid_pre_if & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s0_found & s0_v & (crmd_plv > s0_plv);
     wire preif_exception_because_of_tlb = preif_exception_tlbr_fecth | preif_exception_pif | preif_exception_ppi;
     wire preif_excepetion_adef = valid_pre_if & (preif_pc[1:0] != 2'b00) & ~preif_exception_because_of_tlb;
-    assign inst_sram_req   = valid_pre_if & allow_in_if & ~flush & ~ertn_flush & ~wb_ex & ~vaddr_sign & ~preif_exception_because_of_tlb & ~preif_excepetion_adef;
+    assign inst_sram_req   = valid_pre_if & allow_in_if & ~flush & ~ertn_flush & ~wb_ex & ~vaddr_sign & ~preif_exception_because_of_tlb & ~preif_excepetion_adef & ~stall_because_of_cacop;
     assign inst_sram_wr    = 1'b0;
     assign inst_sram_size  = 2'b10;
     assign inst_sram_wstrb = 4'b0;
@@ -187,7 +189,7 @@ module IF(
             exception_ppi_reg <= preif_exception_ppi;
             exception_adef_reg <= preif_excepetion_adef;
         end
-        else if (ready_go&allow_in_id |wb_ex|flush|ertn_flush|cancel_because_of_vaddr) begin
+        else if (ready_go&allow_in_id |wb_ex|flush|ertn_flush|cancel_because_of_vaddr | cacop_finish_in_exe) begin
             exception_tlbr_fetch_reg <= 1'b0;
             exception_pif_reg <= 1'b0;
             exception_ppi_reg <= 1'b0;
@@ -201,13 +203,13 @@ module IF(
         if (reset) begin
             valid_if <= 1'b0;
         end
-        else if(wb_ex|ertn_flush|cancel_because_of_vaddr) begin
+        else if(wb_ex|ertn_flush|cancel_because_of_vaddr | cacop_finish_in_exe) begin
             valid_if <= 1'b0;
         end
         else if (pre_if_ready_go&allow_in_if) begin
             valid_if <= 1'b1;
         end
-        else if (ready_go&allow_in_id | wb_ex|flush|ertn_flush|cancel_because_of_vaddr) begin
+        else if (ready_go&allow_in_id | wb_ex|flush|ertn_flush|cancel_because_of_vaddr | cacop_finish_in_exe) begin
             valid_if <= 1'b0;
         end
     end
@@ -216,7 +218,7 @@ module IF(
     always @(posedge clk) begin
         if(reset)
             wait_data <= 1'b0;
-        else if (~get_data_state&valid_if&(wb_ex|flush|ertn_flush|cancel_because_of_vaddr)&~exception_because_of_tlb & ~exception_adef_reg)  begin
+        else if (~get_data_state&valid_if&(wb_ex|flush|ertn_flush|cancel_because_of_vaddr | cacop_finish_in_exe)&~exception_because_of_tlb & ~exception_adef_reg)  begin
             wait_data <= 1'b1;
         end
         else if(inst_sram_data_ok)
@@ -238,7 +240,7 @@ module IF(
         if (reset) begin
             if_already_recv_inst <= 1'b0;
         end
-        else if ( valid_if & ready_go & allow_in_id | ertn_flush | flush | wb_ex |cancel_because_of_vaddr) begin
+        else if ( valid_if & ready_go & allow_in_id | ertn_flush | flush | wb_ex |cancel_because_of_vaddr | cacop_finish_in_exe) begin
             if_already_recv_inst <= 1'b0;
         end
         else if (inst_sram_data_ok&valid_if &~wait_data) begin
@@ -246,10 +248,10 @@ module IF(
         end
     end
 
-    assign allow_in_if = ~valid_if | (ready_go & allow_in_id) | wb_ex | flush | ertn_flush | cancel_because_of_vaddr;
+    assign allow_in_if = ~valid_if | (ready_go & allow_in_id) | wb_ex | flush | ertn_flush | cancel_because_of_vaddr | cacop_finish_in_exe;
     wire get_data_state;
     assign get_data_state = ((~wait_data & inst_sram_data_ok)| if_already_recv_inst)&valid_if;
-    assign ready_go    = valid_if & (((get_data_state|exception_because_of_tlb)&(~wb_ex)&(~flush)&(~ertn_flush))|(cancel_because_of_vaddr) | exception_adef_reg);
+    assign ready_go    = valid_if & (((get_data_state|exception_because_of_tlb)&(~wb_ex)&(~flush)&(~ertn_flush))|(cancel_because_of_vaddr | cacop_finish_in_exe) | exception_adef_reg);
     assign inst_if   = (inst_sram_data_ok) ? inst_sram_rdata:inst_sram_rdata_reg;
     assign pc_if     = pc;
     assign exception_adef = exception_adef_reg;

@@ -361,7 +361,7 @@ assign replace_part_is_dirty = (replace_way == 1'b0) && dirty_way0[reg_index]
                             || (replace_way == 1'b1) && dirty_way1[reg_index];
 wire cacop_part_is_dirty;
 assign cacop_part_is_dirty =  (cacop_Hit_Invalidate & ((way0_hit_cacop & dirty_way0[reg_index])|(way1_hit_cacop & dirty_way1[reg_index]))) |
-                             (cacop_Index_Invalidate & (cacop_va[0] ?dirty_way0[cacop_va[11:4]] : dirty_way1[cacop_va[11:4]]));
+                             (cacop_Index_Invalidate & (cacop_va[0] ?dirty_way1[cacop_va[11:4]] : dirty_way0[cacop_va[11:4]]));
 
 always @(posedge clk) begin
     if (reset) begin
@@ -488,7 +488,7 @@ always @(posedge clk) begin
         reg_wdata  <= 32'b0;
         reg_mem_type <= 2'b0;
         reg_valid  <= 1'b0;
-    end else if(lookup || (cacop_Hit_Invalidate_valid | cacop_Index_Invalidate_valid)) begin
+    end else if(lookup || ( cacop_Hit_Invalidate_valid || cacop_Index_Invalidate_valid)) begin
         reg_op     <= op;
         reg_index  <= index;
         reg_tag    <= tag;
@@ -496,7 +496,7 @@ always @(posedge clk) begin
         reg_wstrb  <= wstrb;
         reg_wdata  <= wdata;
         reg_mem_type <= mem_type;
-        reg_valid  <= 1'b1; 
+        reg_valid  <= valid; 
     end
 end
 assign uncache_type = (reg_mem_type == 2'b00);
@@ -551,9 +551,9 @@ always @(posedge clk)begin
     end
     else if(current_state == LOOKUP && ~reg_valid &&cacop_Hit_Invalidate &&cache_hit_cacop) begin
         if(way0_hit_cacop)
-            dirty_way[reg_index] <= 1'b0;
+            dirty_way0[reg_index] <= 1'b0;
         else 
-            dirty_way[reg_index] <= 1'b0; 
+            dirty_way1[reg_index] <= 1'b0; 
     end
     else if(hitwrite)begin
         if(way0_hit)
@@ -572,8 +572,9 @@ end
 //{tag,v}表的操作
 //在lookup,replace时读，在refill时写，可以重复写多次，也可以就在replace切到refill时写一次
 //采取后一种实现,在最后一个数返回时写一次就够
-assign tagv_addr =  {8{(cacop_store_tag | cacop_Index_Invalidate)&~reg_valid} & cacop_va[11:4]} |
-                    {8{cacop_Hit_Invalidate & ~reg_valid} & reg_index} |
+assign tagv_addr =  {8{(cacop_store_tag_valid | cacop_Index_Invalidate)}} & cacop_va[11:4] |
+                    {8{(cacop_Hit_Invalidate_valid)}} & index |
+                    {8{(~cacop_Hit_Invalidate_valid &cacop_Hit_Invalidate)}} & reg_index |
                     {8{lookup_ram_en}} & index |
                     {8{replace}} & reg_index |
                     {8{refill}} & reg_index;
@@ -687,16 +688,24 @@ assign data_wdata = {32{hitwrite}} & write_data |
 //对于下面两个信号，可能同时存在，要依据读的bank予以选择
 assign data_addr[0] = (replace || refill) ? reg_index :
                       (hitwrite && (write_bank == 2'b00)) ? write_index :
+                      (cacop_Hit_Invalidate) ? reg_index:
+                      (cacop_Index_Invalidate) ? cacop_va[11:4]:
                       index;
 assign data_addr[1] = (replace || refill) ? reg_index :
                       (hitwrite && (write_bank == 2'b01)) ? write_index :
-                        index;
+                      (cacop_Hit_Invalidate) ? reg_index:
+                      (cacop_Index_Invalidate) ? cacop_va[11:4]:
+                      index;
 assign data_addr[2] = (replace || refill) ? reg_index :
                       (hitwrite && (write_bank == 2'b10)) ? write_index :
-                        index;
+                      (cacop_Hit_Invalidate) ? reg_index:
+                      (cacop_Index_Invalidate) ? cacop_va[11:4]:
+                      index;
 assign data_addr[3] = (replace || refill) ? reg_index :
                       (hitwrite && (write_bank == 2'b11)) ? write_index :
-                        index;
+                      (cacop_Hit_Invalidate) ? reg_index:
+                      (cacop_Index_Invalidate) ? cacop_va[11:4]:
+                      index;
 
 //cache与总线的交互接口
 //对于uncache的写不用发出读请求
@@ -727,30 +736,38 @@ reg [19:0] reg_cacop_tag; //由于在LOOKUP时，会将tag清零，因此需要�
 always @(posedge clk) begin
     if(reset)
         reg_cacop_tag <= 20'b0;
-    else if(cacop_va[0])
+    else if(cacop_va[0] & cacop_Index_Invalidate_valid)
         reg_cacop_tag <= tagv_w1_rdata[20:1];
-    else if(cacop_va[1])
+    else if(~cacop_va[0] & cacop_Index_Invalidate_valid)
         reg_cacop_tag <= tagv_w0_rdata[20:1];
 end
 assign wr_req = wr_req_reg;
 assign wr_type = {3{~uncache_type && reg_op && reg_valid}} & WRITE_BLOCK
                 |{3{ uncache_type && reg_valid}} & WRITE_WORD
-                |{3{~reg_valid} & WRITE_BLOCK }; 
+                |{3{~reg_valid}} & WRITE_BLOCK ; 
 assign wr_addr = {32{uncache_type & reg_valid}} & {reg_tag, reg_index, reg_offset}
                 |{32{~uncache_type & reg_valid}} &
                 ({32{replace_way == 1'b0}} & {way0_tag, reg_index, 4'b0000} |
                  {32{replace_way == 1'b1}} & {way1_tag, reg_index, 4'b0000})
                 | {32{~reg_valid & cacop_Index_Invalidate}} & {reg_cacop_tag,cacop_va[11:4],4'b0000}
-                | {32{~reg_valid & cacop_Hit_Invalidate}} & {cacop_va[31:4],4'b0000};
+                | {32{~reg_valid & cacop_Hit_Invalidate}} & {reg_tag, reg_index,4'b0000};
 assign wr_wstrb = {4{ uncache_type & reg_valid}} & reg_wstrb
-                | {4{~uncache_type & reg_valid}} &4'b1111; 
+                | {4{~uncache_type & reg_valid}} &4'b1111 
                 | {4{~reg_valid}} & 4'b1111;
+reg cacop_hit_way;
+always @(posedge clk) begin
+    if(reset)
+        cacop_hit_way <= 1'b0;
+    else if(cacop_Hit_Invalidate && current_state == LOOKUP && cache_hit_cacop)
+        cacop_hit_way <= way1_hit_cacop;
+end
 assign wr_data = {128{uncache_type & reg_valid}} & {96'b0, reg_wdata}
                 |{128{~uncache_type & reg_valid}} &
                 ({128{replace_way == 1'b0}} & way0_data |
                  {128{replace_way == 1'b1}} & way1_data) 
                 | {128{~reg_valid}} & 
-                (cacop_va[0] ? way1_data : way0_data);
+                (cacop_Index_Invalidate ? (cacop_va[0] ? way1_data : way0_data) :
+                 (cacop_hit_way ? way1_data : way0_data));
 //cpu接口信号
 //此处有一个问题，就是如果addr_ok依赖于valid，那么在cpu内存应该注意req的发出不能依赖于addr_ok;
 //这个地方addr_ok不用改变
@@ -763,5 +780,7 @@ assign data_ok = (current_state == LOOKUP) && (cache_hit || (reg_op == WRITE && 
 //此处有一个细节，就是store操作即使不命中，也是直接data_ok拉高
 //这样当refill时，只有读才需要拉高data_ok
 assign rdata = load_data;
+assign cacop_finish = (cacop_store_tag_valid) || (current_state == LOOKUP && ~reg_valid && (cacop_Hit_Invalidate | cacop_Index_Invalidate) && ~cacop_part_is_dirty) ||
+                      (current_state == REPLACE && ~reg_valid && (cacop_Hit_Invalidate | cacop_Index_Invalidate)) ;
 
 endmodule

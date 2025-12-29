@@ -47,6 +47,15 @@ wire vaddr_sign_wb;
 
 wire vaddr_about_inst_happen_in_wb;
 wire invalidtlb_happen_in_ex;
+wire [1:0]  cacop_op;
+wire        cacop_req_icache;
+wire        cacop_req_dcache;
+wire [31:0] cacop_va;
+wire        cacop_finish_icache;
+wire        cacop_finish_dcache;
+wire        cacop_finish_in_exe;
+wire        cacop_inst_in_exe;
+wire        cacop_inst_in_id;
 
 wire [31:0] invalidtlb_pc;
 wire [31:0] vaddr_about_inst_pc;
@@ -144,7 +153,10 @@ IF IF_PART(
     .invalidtlb_happen_in_ex(invalidtlb_happen_in_ex),
     .invalidtlb_pc(invalidtlb_pc),
     .vaddr_about_inst_happen_in_wb(vaddr_about_inst_happen_in_wb),
-    .vaddr_about_inst_pc(vaddr_about_inst_pc)
+    .vaddr_about_inst_pc(vaddr_about_inst_pc),
+    .cacop_finish_in_exe(cacop_finish_in_exe),
+    .cacop_inst_in_id(cacop_inst_in_id),
+    .cacop_inst_in_exe(cacop_inst_in_exe)
 );
 
 wire        allow_in_id;
@@ -226,7 +238,9 @@ ID ID_PART(
     .exception_state_tlb(exception_state_tlb_id),
     .tlb_related_inst(tlb_related_inst_id),
     .invalidtlb_happen_in_ex(invalidtlb_happen_in_ex),
-    .vaddr_about_inst_happen_in_wb(vaddr_about_inst_happen_in_wb)
+    .vaddr_about_inst_happen_in_wb(vaddr_about_inst_happen_in_wb),
+    .cacop_finish_in_exe(cacop_finish_in_exe),
+    .cacop_inst_in_id(cacop_inst_in_id)
 );
 
 wire        allow_in_exe;
@@ -343,7 +357,16 @@ EXE EXE_PART(
     .csr_asid  (csr_asid_state  ),
     .tlbehi_vppn (tlbehi_vppn),
     .tlbsrch_csr_message(tlbsrch_csr_message_exe),
-    .datm_csr    (datm_csr    )
+    .datm_csr    (datm_csr    ),
+    .cacop_op  (cacop_op  ),
+    .cacop_req_icache(cacop_req_icache),
+    .cacop_req_dcache(cacop_req_dcache),
+    .cacop_va  (cacop_va),
+    .cacop_finish_dcache(cacop_finish_dcache),
+    .cacop_finish_icache(cacop_finish_icache),
+    .cacop_inst_in_exe(cacop_inst_in_exe),
+    .cacop_finish_in_exe(cacop_finish_in_exe),
+    .cacop_inst_in_id(cacop_inst_in_id)
 );
 
 wire ready_go_mem;
@@ -753,14 +776,20 @@ wire [2:0] icache_wr_type;
 wire [31:0] icache_wr_addr;
 wire [3:0] icache_wr_strb;
 wire [127:0] icache_wr_data;
+wire [11:0] icache_addr_vrtl;
+wire [19:0] icache_addr_tag;
+wire cacop_req_hit_invalid;
+assign cacop_req_hit_invalid = cacop_req_icache & (cacop_op == 2'b10);
+assign icache_addr_vrtl = cacop_req_hit_invalid ? data_addr_vrtl : inst_addr_vrtl;
+assign icache_addr_tag = cacop_req_hit_invalid ? data_sram_addr[31:12] : inst_sram_addr[31:12];
 cache icache(
     .clk    (clk                       ),
     .resetn (resetn                    ),
     .valid  (inst_sram_req              ),
     .op     (inst_sram_wr               ),
-    .index  (inst_addr_vrtl[11:4]       ),
-    .tag    (inst_sram_addr[31:12]      ),
-    .offset (inst_addr_vrtl[3:0]        ),
+    .index  (icache_addr_vrtl[11:4]       ),
+    .tag    (icache_addr_tag              ),
+    .offset (icache_addr_vrtl[3:0]        ),
     .wstrb  (inst_sram_wstrb            ),
     .wdata  (inst_sram_wdata            ),
     .addr_ok(inst_sram_addr_ok            ),
@@ -783,7 +812,12 @@ cache icache(
     .wr_addr(icache_wr_addr             ),
     .wr_wstrb(icache_wr_strb             ),
     .wr_data(icache_wr_data             ),
-    .wr_rdy (icache_wr_rdy              )
+    .wr_rdy (icache_wr_rdy              ),
+
+    .cacop_req (cacop_req_icache),
+    .cacop_op  (cacop_op),
+    .cacop_va  (cacop_va),
+    .cacop_finish(cacop_finish_icache)
 );
 
 cache dcache(
@@ -815,6 +849,11 @@ cache dcache(
     .wr_addr(dcache_wr_addr             ),
     .wr_wstrb(dcache_wr_wstrb            ),
     .wr_data(dcache_wr_data             ),
-    .wr_rdy (dcache_wr_rdy              )
+    .wr_rdy (dcache_wr_rdy              ),
+
+    .cacop_req (cacop_req_dcache),
+    .cacop_op  (cacop_op),
+    .cacop_va  (cacop_va),
+    .cacop_finish(cacop_finish_dcache)
 );
 endmodule

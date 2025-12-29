@@ -62,6 +62,7 @@ module ID(
     input          invalidtlb_happen_in_ex,
     input          vaddr_about_inst_happen_in_wb,
     //cacop相关
+    input          cacop_finish_in_exe,
     output         cacop_inst_in_id
 );
 
@@ -161,7 +162,7 @@ module ID(
         if (reset) begin
             valid <= 1'b0;
         end
-        else if(wb_ex || ertn_flush || invalidtlb_happen_in_ex || vaddr_about_inst_happen_in_wb) begin
+        else if(wb_ex || ertn_flush || invalidtlb_happen_in_ex || vaddr_about_inst_happen_in_wb || cacop_finish_in_exe) begin
             valid <= 1'b0;
         end
         else if (handshake_fd) begin
@@ -283,7 +284,7 @@ module ID(
     wire [18:0] alu_op;
     assign alu_op_id = alu_op;
     assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_w | inst_st_w
-                    | inst_jirl | inst_bl | inst_pcaddu12i | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_st_b | inst_st_h;
+                    | inst_jirl | inst_bl | inst_pcaddu12i | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_st_b | inst_st_h | inst_cacop;
     assign alu_op[ 1] = inst_sub_w;
     assign alu_op[ 2] = inst_slt|inst_slti;
     assign alu_op[ 3] = inst_sltu|inst_sltiu;
@@ -506,7 +507,7 @@ module ID(
     //vaddr_sign表明这条指令可能改变虚实映射关系
     //通过csr改变,pg,da,dmw,asid等
     //这个地方不太对，应为tlbsrch，rd不会改变虚实映射关系
-    wire vaddr_sign_csr = csr_we &  (csr_num == `CSR_CRMD && (|csr_wmask[4:3]) || csr_num == `CSR_DMW0 || csr_num == `CSR_DMW1 || csr_num == `CSR_ASID);
+    wire vaddr_sign_csr = csr_we &  (csr_num == `CSR_CRMD && (|csr_wmask[8:3]) || csr_num == `CSR_DMW0 || csr_num == `CSR_DMW1 || csr_num == `CSR_ASID);
     wire vaddr_sign_tlb =inst_tlbwr | inst_tlbfill | inst_invtlb;
     //但是现在会有问题是由于tlbsrch需要使用相关寄存器查询，因此要有一个标记，这条指令是否会改变所需寄存器
     //并且此时经过考虑，发现如果在ex级写csr会产生写后写问题，因此改变写csr时机，到wb级再统一操作csr

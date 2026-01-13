@@ -1,0 +1,823 @@
+diff --git a/../exp23/myCPU/EXE.v b/../exp22/myCPU/EXE.v
+index c372f12..3860ea1 100644
+--- a/../exp23/myCPU/EXE.v
++++ b/../exp22/myCPU/EXE.v
+@@ -16,9 +16,6 @@ module EXE(
+     input [31:0]    rdata2_from_id,
+     input [31:0]    rdata1_from_id,
+     input [1:0]     inst_rdcntv,
+-    input           cacop_inst_in_id,
+-    output          cacop_inst_in_exe,
+-    output          cacop_finish_in_exe,
+     //to MEM
+     output          ready_go,
+     input           MEM_allow_in,
+@@ -102,16 +99,8 @@ module EXE(
+     input  [9:0]  csr_asid,
+     input  [18:0]  tlbehi_vppn,
+     input          csr_addr_mode,
+-    input  [1:0]   datm_csr,
+-
+-    output [1:0] cacop_op,
+-    output       cacop_req_icache,
+-    output       cacop_req_dcache,
+-    output  [31:0] cacop_va,
+-    input   cacop_finish_icache,
+-    input   cacop_finish_dcache 
+-);  
+-    wire stall_inst_effect;
++    input  [1:0]   datm_csr
++);
+     always @(posedge clk) begin
+         if (reset) begin
+             valid <= 1'b0;
+@@ -126,49 +115,6 @@ module EXE(
+             valid <= 1'b0;
+         end
+     end
+-    reg inst_cacop_reg;
+-    always @(posedge clk) begin
+-        if(reset) begin
+-            inst_cacop_reg <= 1'b0;
+-        end
+-        else if(ready_go_id &allow_in) begin
+-            inst_cacop_reg <= cacop_inst_in_id;
+-        end 
+-        else if(cacop_finish_in_exe || wb_ex) begin
+-            inst_cacop_reg <= 1'b0;
+-        end
+-    end
+-    assign cacop_inst_in_exe = inst_cacop_reg & valid;
+-    reg    icache_cacop_finish_reg;
+-    reg    dcache_cacop_finish_reg;
+-    always @(posedge clk) begin
+-        if(reset) begin
+-            icache_cacop_finish_reg <= 1'b0;
+-        end
+-        else if(ready_go_id & allow_in) begin
+-            icache_cacop_finish_reg <= 1'b0;
+-        end
+-        else if(cacop_finish_icache) begin
+-            icache_cacop_finish_reg <= 1'b1;
+-        end
+-    end
+-    always @(posedge clk) begin
+-        if(reset) begin
+-            dcache_cacop_finish_reg <= 1'b0;
+-        end
+-        else if(ready_go_id & allow_in) begin
+-            dcache_cacop_finish_reg <= 1'b0;
+-        end
+-        else if(cacop_finish_dcache) begin
+-            dcache_cacop_finish_reg <= 1'b1; 
+-        end
+-    end
+-    wire   cacop_Hit_tlb_exception;
+-    assign cacop_finish_in_exe = (icache_cacop_finish_reg & dcache_cacop_finish_reg) & inst_cacop_reg & valid;
+-    assign cacop_op = inst_reg[4:3];
+-    assign cacop_va = alu_result;
+-    assign cacop_req_icache = cacop_inst_in_exe & (~icache_cacop_finish_reg) & ~stall_inst_effect & ~cacop_Hit_tlb_exception;
+-    assign cacop_req_dcache = cacop_inst_in_exe & (~dcache_cacop_finish_reg) & ~stall_inst_effect & ~cacop_Hit_tlb_exception;
+     wire inst_rdcntvh_w = inst_rdcntv_reg[1];
+     wire inst_rdcntvl_w = inst_rdcntv_reg[0];
+     reg [63:0] timer_cnt_global;
+@@ -366,8 +312,7 @@ module EXE(
+     assign allow_in   = ~valid | (ready_go&&MEM_allow_in && ~invalidtlb_happen_in_ex);
+     assign ready_go   = valid&((!div_en_reg) | (current_state[2]&&div_result_ready) | current_state[3] | ex_stall_mem_store | vaddr_sign_from_mem | vaddr_sign_from_wb)
+     &((~mem_type)|(data_sram_addr_ok&data_sram_req)|mem_req_ready|ex_stall_mem_store | vaddr_sign_from_mem | vaddr_sign_from_wb)
+-    &((~inst_tlbsrch)|(~stall_srch_from_mem & ~stall_srch_from_wb))
+-    & (~inst_cacop_reg || cacop_Hit_tlb_exception); //阻塞
++    &((~inst_tlbsrch)|(~stall_srch_from_mem & ~stall_srch_from_wb)); //阻塞
+     assign inst_exe   = inst_reg;
+     assign pc_exe     = pc_reg;
+     assign forward_data_exe = alu_result_without_div_mul;
+@@ -432,16 +377,13 @@ module EXE(
+                          (csr_addr_mode == 1'b0) ? datm_csr : //物理地址模式
+                          s1_mat; //tlb地址转换
+     assign data_addr_vrtl = alu_result[11:0];
+-    wire cacop_Hit_Invalidate;
+-    assign cacop_Hit_Invalidate = (cacop_op == 2'b10) && (inst_cacop_reg) && valid;
+     //由此产生异常
+-    wire   exception_TLBR_DATA = valid & (mem_type || cacop_Hit_Invalidate) & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & ~s1_found & ~exception_state_before;
+-    wire   exception_PIL = valid & (mem_type || cacop_Hit_Invalidate) & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & ~mem_st & ~s1_v & ~exception_state_before;
++    wire   exception_TLBR_DATA = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & ~s1_found & ~exception_state_before;
++    wire   exception_PIL = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & ~mem_st & ~s1_v & ~exception_state_before;
+     wire   exception_PIS = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & mem_st & ~s1_v & ~exception_state_before;
+     wire   exception_PME = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & s1_v & mem_st & (crmd_plv <= s1_plv) &!s1_d & ~exception_state_before;
+-    wire   exception_PPI_DATA = valid & (mem_type || cacop_Hit_Invalidate) & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & s1_v &(crmd_plv > s1_plv) & ~exception_state_before;
++    wire   exception_PPI_DATA = valid & mem_type & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s1_found & s1_v &(crmd_plv > s1_plv) & ~exception_state_before;
+     wire   exception_tlb_exe = exception_TLBR_DATA | exception_PIL | exception_PIS | exception_PME | exception_PPI_DATA;
+-    assign cacop_Hit_tlb_exception = exception_TLBR_DATA | exception_PPI_DATA | exception_PIL;
+     assign data_sram_req    = valid&~mem_req_ready&mem_type&~ex_stall_mem_store & ~vaddr_sign_from_mem & ~vaddr_sign_from_wb;          //由异常阻止和虚实地址改变阻止
+     assign data_sram_wr     = mem_st;
+     assign data_sram_size   = (mem_w?2'b10:
+@@ -532,6 +474,4 @@ module EXE(
+     assign tlbsrch_index = s1_index;
+     assign tlbsrch_csr_message = {tlbsrch_hit, tlbsrch_index};
+     assign tlb_related_inst = tlb_related_inst_reg;
+-    assign stall_inst_effect = exception_state_exe_now | vaddr_sign_from_mem | vaddr_sign_from_wb | wb_ex | ertn_flush
+-                              | exception_state_mem | ertn_mem;
+ endmodule
+\ No newline at end of file
+diff --git a/../exp23/myCPU/ID.v b/../exp22/myCPU/ID.v
+index 4611d05..a9e6e0d 100644
+--- a/../exp23/myCPU/ID.v
++++ b/../exp22/myCPU/ID.v
+@@ -60,10 +60,7 @@ module ID(
+     output [3:0]   exception_state_tlb,
+     output [5:0]   tlb_related_inst,
+     input          invalidtlb_happen_in_ex,
+-    input          vaddr_about_inst_happen_in_wb,
+-    //cacop相关
+-    input          cacop_finish_in_exe,
+-    output         cacop_inst_in_id
++    input          vaddr_about_inst_happen_in_wb
+ );
+ 
+     wire [63:0] op_31_26_d;
+@@ -145,8 +142,6 @@ module ID(
+     wire       inst_tlbfill;
+     wire        inst_invtlb;
+ 
+-    wire        inst_cacop;
+-
+     wire        need_ui5;
+     wire        need_si12;
+     wire        need_si16;
+@@ -162,7 +157,7 @@ module ID(
+         if (reset) begin
+             valid <= 1'b0;
+         end
+-        else if(wb_ex || ertn_flush || invalidtlb_happen_in_ex || vaddr_about_inst_happen_in_wb || cacop_finish_in_exe) begin
++        else if(wb_ex || ertn_flush || invalidtlb_happen_in_ex || vaddr_about_inst_happen_in_wb) begin
+             valid <= 1'b0;
+         end
+         else if (handshake_fd) begin
+@@ -263,7 +258,6 @@ module ID(
+     assign inst_tlbwr   = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & rk == 5'h0c;
+     assign inst_tlbfill = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & rk == 5'h0d;
+     assign inst_invtlb  = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h13];
+-    assign inst_cacop   = op_31_26_d[6'h01] & op_25_22_d[4'h8];
+ 
+     wire exception_ine;
+     assign exception_ine = (~(inst_add_w  | inst_sub_w  | inst_slt    | inst_sltu   | inst_nor    | inst_and    |
+@@ -275,8 +269,7 @@ module ID(
+                              inst_blt    | inst_bge    | inst_bltu   | inst_bgeu   | inst_ld_b   | inst_ld_h   |
+                              inst_ld_bu  | inst_ld_hu  | inst_st_b   | inst_st_h   | inst_csrrd  | inst_csrwr  |
+                              inst_csrxchg| inst_ertn  | inst_syscall| inst_rdcntvl_w|inst_rdcntvh_w|inst_break |
+-                             inst_rdcntid_w | inst_tlbsrch | inst_tlbrd | inst_tlbwr | inst_tlbfill | inst_invtlb
+-                             |inst_cacop)|
++                             inst_rdcntid_w | inst_tlbsrch | inst_tlbrd | inst_tlbwr | inst_tlbfill | inst_invtlb)|
+                              (inst_invtlb && (inst_reg[4:0]!=5'd0 && inst_reg[4:0]!=5'd1 && inst_reg[4:0]!=5'd2
+                              && inst_reg[4:0]!=5'd3 && inst_reg[4:0]!=5'd4 && inst_reg[4:0]!=5'd5 && inst_reg[4:0]!=5'd6)))
+                              & valid & (~exception_adef) & (~exception_tlbr_fetch_id) & (~exception_pif_id) & 
+@@ -284,7 +277,7 @@ module ID(
+     wire [18:0] alu_op;
+     assign alu_op_id = alu_op;
+     assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_w | inst_st_w
+-                    | inst_jirl | inst_bl | inst_pcaddu12i | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_st_b | inst_st_h | inst_cacop;
++                    | inst_jirl | inst_bl | inst_pcaddu12i | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_st_b | inst_st_h;
+     assign alu_op[ 1] = inst_sub_w;
+     assign alu_op[ 2] = inst_slt|inst_slti;
+     assign alu_op[ 3] = inst_sltu|inst_sltiu;
+@@ -334,12 +327,11 @@ module ID(
+                             inst_ld_b   |
+                             inst_ld_h   |
+                             inst_ld_bu  |
+-                            inst_ld_hu  |
+-                            inst_cacop;
++                            inst_ld_hu  ;
+ 
+     //about imm
+     assign need_ui5   =  inst_slli_w | inst_srli_w | inst_srai_w;
+-    assign need_si12  =  inst_addi_w | inst_ld_w | inst_st_w| inst_slti | inst_sltiu | inst_st_b | inst_st_h | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_cacop;
++    assign need_si12  =  inst_addi_w | inst_ld_w | inst_st_w| inst_slti | inst_sltiu | inst_st_b | inst_st_h | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu;
+     assign need_si12_unsigned  = inst_andi | inst_ori | inst_xori ; 
+     assign need_si16  =  inst_jirl | inst_beq | inst_bne | inst_blt | inst_bge | inst_bltu | inst_bgeu;
+     assign need_si20  =  inst_lu12i_w | inst_pcaddu12i;
+@@ -435,7 +427,7 @@ module ID(
+                   : rd;
+     assign reg_en = (~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu
+                      & ~inst_st_b & ~inst_st_h & ~inst_ertn & ~inst_syscall
+-                     & ~inst_tlbsrch & ~inst_tlbrd & ~inst_tlbwr & ~inst_tlbfill & ~inst_invtlb & ~inst_cacop)&~exception_state;
++                     & ~inst_tlbsrch & ~inst_tlbrd & ~inst_tlbwr & ~inst_tlbfill & ~inst_invtlb)&~exception_state;
+     assign mem_en = {{5{inst_st_w}}  & 5'b10011 |
+                     {5{inst_st_b}}  & 5'b10001 |
+                     {5{inst_st_h}}  & 5'b10010 |
+@@ -507,7 +499,7 @@ module ID(
+     //vaddr_sign表明这条指令可能改变虚实映射关系
+     //通过csr改变,pg,da,dmw,asid等
+     //这个地方不太对，应为tlbsrch，rd不会改变虚实映射关系
+-    wire vaddr_sign_csr = csr_we &  (csr_num == `CSR_CRMD && (|csr_wmask[8:3]) || csr_num == `CSR_DMW0 || csr_num == `CSR_DMW1 || csr_num == `CSR_ASID);
++    wire vaddr_sign_csr = csr_we &  (csr_num == `CSR_CRMD && (|csr_wmask[4:3]) || csr_num == `CSR_DMW0 || csr_num == `CSR_DMW1 || csr_num == `CSR_ASID);
+     wire vaddr_sign_tlb =inst_tlbwr | inst_tlbfill | inst_invtlb;
+     //但是现在会有问题是由于tlbsrch需要使用相关寄存器查询，因此要有一个标记，这条指令是否会改变所需寄存器
+     //并且此时经过考虑，发现如果在ex级写csr会产生写后写问题，因此改变写csr时机，到wb级再统一操作csr
+@@ -538,5 +530,6 @@ module ID(
+                                     csr_wdata //32
+                                 };
+     assign inst_rdcntv = {inst_rdcntvh_w, inst_rdcntvl_w};
+-    assign cacop_inst_in_id = inst_cacop && valid;
++
++
+ endmodule
+diff --git a/../exp23/myCPU/IF.v b/../exp22/myCPU/IF.v
+index 6fc283b..fa3e930 100644
+--- a/../exp23/myCPU/IF.v
++++ b/../exp22/myCPU/IF.v
+@@ -68,10 +68,8 @@ module IF(
+     input  wire        vaddr_about_inst_happen_in_wb,       //此处是应该能做一些优化的，比如不是每一级都接受下面所有级的信号，而是一级一级向上传递，但是由于对于性能没有什么要求
+                                                            //暂且就这样实现，主要是这样的扩展性是比较好的
+     input  wire [31:0] invalidtlb_pc,
+-    input  wire [31:0] vaddr_about_inst_pc,    //对于标记重取法的下一条指令都是产生标记的指令pc + 4,此时需要对应的pc送入IF级重新取指
+-    input              cacop_finish_in_exe,
+-    input              cacop_inst_in_id,
+-    input              cacop_inst_in_exe
++    input  wire [31:0] vaddr_about_inst_pc    //对于标记重取法的下一条指令都是产生标记的指令pc + 4,此时需要对应的pc送入IF级重新取指
++
+ );  
+     reg    valid_pre_if;
+ //pre-if
+@@ -100,7 +98,7 @@ module IF(
+     //开机逻辑结束
+     wire vaddr_sign = vaddr_sign_from_id | vaddr_sign_from_ex | vaddr_sign_from_mem | vaddr_sign_from_wb;
+     wire cancel_because_of_vaddr = invalidtlb_happen_in_ex | vaddr_about_inst_happen_in_wb;
+-    wire stall_because_of_cacop = cacop_inst_in_exe | cacop_inst_in_id;
++
+     always @(posedge clk) begin
+         if (reset) begin
+             preif_pc <= 32'h1c000000;
+@@ -109,11 +107,11 @@ module IF(
+             preif_pc <= next_preif_pc;
+         end
+     end    //对于标记重取法的下一条指令都是产生标记的指令pc + 4
+-    assign preif_pc_update = (((inst_sram_addr_ok&inst_sram_req)| cacop_finish_in_exe | wb_ex | ertn_flush | flush | vaddr_about_inst_happen_in_wb | invalidtlb_happen_in_ex) & valid_pre_if);
++    assign preif_pc_update = (((inst_sram_addr_ok&inst_sram_req) | wb_ex | ertn_flush | flush | vaddr_about_inst_happen_in_wb | invalidtlb_happen_in_ex) & valid_pre_if);
+     assign next_preif_pc = wb_ex ? ex_entry :
+                            ertn_flush ? ertn_entry :
+                             vaddr_about_inst_happen_in_wb ? (vaddr_about_inst_pc + 4) :
+-                            (invalidtlb_happen_in_ex || cacop_finish_in_exe) ? (invalidtlb_pc + 4) :
++                            invalidtlb_happen_in_ex ? (invalidtlb_pc + 4) :
+                            flush ? newpc :
+                            preif_pc + 4;
+     //这个地方需要予以改变适应地址翻译模式
+@@ -152,7 +150,7 @@ module IF(
+     wire preif_exception_ppi = valid_pre_if & csr_addr_mode & ~DMW0_hit & ~DMW1_hit & s0_found & s0_v & (crmd_plv > s0_plv);
+     wire preif_exception_because_of_tlb = preif_exception_tlbr_fecth | preif_exception_pif | preif_exception_ppi;
+     wire preif_excepetion_adef = valid_pre_if & (preif_pc[1:0] != 2'b00) & ~preif_exception_because_of_tlb;
+-    assign inst_sram_req   = valid_pre_if & allow_in_if & ~flush & ~ertn_flush & ~wb_ex & ~vaddr_sign & ~preif_exception_because_of_tlb & ~preif_excepetion_adef & ~stall_because_of_cacop;
++    assign inst_sram_req   = valid_pre_if & allow_in_if & ~flush & ~ertn_flush & ~wb_ex & ~vaddr_sign & ~preif_exception_because_of_tlb & ~preif_excepetion_adef;
+     assign inst_sram_wr    = 1'b0;
+     assign inst_sram_size  = 2'b10;
+     assign inst_sram_wstrb = 4'b0;
+@@ -189,7 +187,7 @@ module IF(
+             exception_ppi_reg <= preif_exception_ppi;
+             exception_adef_reg <= preif_excepetion_adef;
+         end
+-        else if (ready_go&allow_in_id |wb_ex|flush|ertn_flush|cancel_because_of_vaddr | cacop_finish_in_exe) begin
++        else if (ready_go&allow_in_id |wb_ex|flush|ertn_flush|cancel_because_of_vaddr) begin
+             exception_tlbr_fetch_reg <= 1'b0;
+             exception_pif_reg <= 1'b0;
+             exception_ppi_reg <= 1'b0;
+@@ -203,13 +201,13 @@ module IF(
+         if (reset) begin
+             valid_if <= 1'b0;
+         end
+-        else if(wb_ex|ertn_flush|cancel_because_of_vaddr | cacop_finish_in_exe) begin
++        else if(wb_ex|ertn_flush|cancel_because_of_vaddr) begin
+             valid_if <= 1'b0;
+         end
+         else if (pre_if_ready_go&allow_in_if) begin
+             valid_if <= 1'b1;
+         end
+-        else if (ready_go&allow_in_id | wb_ex|flush|ertn_flush|cancel_because_of_vaddr | cacop_finish_in_exe) begin
++        else if (ready_go&allow_in_id | wb_ex|flush|ertn_flush|cancel_because_of_vaddr) begin
+             valid_if <= 1'b0;
+         end
+     end
+@@ -218,7 +216,7 @@ module IF(
+     always @(posedge clk) begin
+         if(reset)
+             wait_data <= 1'b0;
+-        else if (~get_data_state&valid_if&(wb_ex|flush|ertn_flush|cancel_because_of_vaddr | cacop_finish_in_exe)&~exception_because_of_tlb & ~exception_adef_reg)  begin
++        else if (~get_data_state&valid_if&(wb_ex|flush|ertn_flush|cancel_because_of_vaddr)&~exception_because_of_tlb & ~exception_adef_reg)  begin
+             wait_data <= 1'b1;
+         end
+         else if(inst_sram_data_ok)
+@@ -240,7 +238,7 @@ module IF(
+         if (reset) begin
+             if_already_recv_inst <= 1'b0;
+         end
+-        else if ( valid_if & ready_go & allow_in_id | ertn_flush | flush | wb_ex |cancel_because_of_vaddr | cacop_finish_in_exe) begin
++        else if ( valid_if & ready_go & allow_in_id | ertn_flush | flush | wb_ex |cancel_because_of_vaddr) begin
+             if_already_recv_inst <= 1'b0;
+         end
+         else if (inst_sram_data_ok&valid_if &~wait_data) begin
+@@ -248,10 +246,10 @@ module IF(
+         end
+     end
+ 
+-    assign allow_in_if = ~valid_if | (ready_go & allow_in_id) | wb_ex | flush | ertn_flush | cancel_because_of_vaddr | cacop_finish_in_exe;
++    assign allow_in_if = ~valid_if | (ready_go & allow_in_id) | wb_ex | flush | ertn_flush | cancel_because_of_vaddr;
+     wire get_data_state;
+     assign get_data_state = ((~wait_data & inst_sram_data_ok)| if_already_recv_inst)&valid_if;
+-    assign ready_go    = valid_if & (((get_data_state|exception_because_of_tlb)&(~wb_ex)&(~flush)&(~ertn_flush))|(cancel_because_of_vaddr | cacop_finish_in_exe) | exception_adef_reg);
++    assign ready_go    = valid_if & (((get_data_state|exception_because_of_tlb)&(~wb_ex)&(~flush)&(~ertn_flush))|(cancel_because_of_vaddr) | exception_adef_reg);
+     assign inst_if   = (inst_sram_data_ok) ? inst_sram_rdata:inst_sram_rdata_reg;
+     assign pc_if     = pc;
+     assign exception_adef = exception_adef_reg;
+diff --git a/../exp23/myCPU/cache.v b/../exp22/myCPU/cache.v
+index d1f65fa..6120e4d 100644
+--- a/../exp23/myCPU/cache.v
++++ b/../exp22/myCPU/cache.v
+@@ -32,13 +32,7 @@ module cache(
+     output wire [ 3:0] wr_wstrb,  // 写操作字节掩码，仅在 WRITE_BYTE, WRITE_HALFWORD, WRITE_WORD下有意义
+     output wire [127:0] wr_data, // 写数据
+ 
+-    input  wire        wr_rdy,    // 写请求能否被接收的握手信号
+-
+-    //cacop接口
+-    input  wire        cacop_req,
+-    output wire        cacop_finish,
+-    input  wire [1:0]  cacop_op,
+-    input  wire [31:0] cacop_va
++    input  wire        wr_rdy    // 写请求能否被接收的握手信号
+     );
+ //在cache中有四种信号，根据状态机理解，hitwrite是单独的操作（请务必理解这个地方的每一句话）
+ 
+@@ -137,20 +131,6 @@ wire [31:0] data_w1_rdata[3:0];
+ wire        data_w0_en[3:0], data_w1_en[3:0];
+ wire [ 3:0] data_w0_we[3:0], data_w1_we[3:0];
+ 
+-//cacop相关信号
+-wire cacop_store_tag;
+-wire cacop_Index_Invalidate;
+-wire cacop_Hit_Invalidate;
+-assign cacop_store_tag = (cacop_op == 2'b00) && cacop_req;
+-assign cacop_Index_Invalidate = (cacop_op == 2'b01) && cacop_req;
+-assign cacop_Hit_Invalidate = (cacop_op == 2'b10) && cacop_req;
+-
+-wire cacop_store_tag_valid;
+-wire cacop_Index_Invalidate_valid;
+-wire cacop_Hit_Invalidate_valid;
+-assign cacop_store_tag_valid = cacop_store_tag && (current_state == IDLE) && (writebuf_cstate == WRITEBUF_IDLE);
+-assign cacop_Index_Invalidate_valid = cacop_Index_Invalidate && (current_state == IDLE) && (writebuf_cstate == WRITEBUF_IDLE);
+-assign cacop_Hit_Invalidate_valid = cacop_Hit_Invalidate && (current_state == IDLE) && (writebuf_cstate == WRITEBUF_IDLE);
+ 
+ tagv_ram tagv_way0(
+     .addra(tagv_addr),
+@@ -270,7 +250,6 @@ reg [31:0] write_data; //写入的数据
+ //request buffer用于存储当前的请求信息
+ //看一眼接口信号（请一定要看）
+ //包括op,index,tag,offset,wstrb,wdata
+-reg        reg_valid;
+ reg        reg_op;
+ reg [ 7:0] reg_index;
+ reg [19:0] reg_tag;
+@@ -288,8 +267,6 @@ wire       uncache_type;
+ wire        way0_v, way1_v;
+ wire [19:0] way0_tag, way1_tag;
+ wire        way0_hit, way1_hit;
+-wire        way0_hit_cacop,way1_hit_cacop;
+-wire        cache_hit_cacop;
+ wire        cache_hit;
+ 
+ assign {way0_tag, way0_v} = tagv_w0_rdata;
+@@ -297,9 +274,6 @@ assign {way1_tag, way1_v} = tagv_w1_rdata;
+ assign way0_hit = (way0_tag == reg_tag) && way0_v && (~uncache_type);
+ assign way1_hit = (way1_tag == reg_tag) && way1_v && (~uncache_type);
+ assign cache_hit = way0_hit || way1_hit;
+-assign way0_hit_cacop = (way0_tag == reg_tag) && way0_v;
+-assign way1_hit_cacop = (way1_tag == reg_tag) && way1_v;
+-assign cache_hit_cacop = way0_hit_cacop || way1_hit_cacop;
+ 
+ //DATA select parts
+ //这个选出需要返回给cpu的数据，和选出需要执行replace时送入data ram的数据
+@@ -359,9 +333,6 @@ assign conflict_load_same_addr =    (current_state == LOOKUP) &
+ wire replace_part_is_dirty;
+ assign replace_part_is_dirty = (replace_way == 1'b0) && dirty_way0[reg_index] 
+                             || (replace_way == 1'b1) && dirty_way1[reg_index];
+-wire cacop_part_is_dirty;
+-assign cacop_part_is_dirty =  (cacop_Hit_Invalidate & ((way0_hit_cacop & dirty_way0[reg_index])|(way1_hit_cacop & dirty_way1[reg_index]))) |
+-                             (cacop_Index_Invalidate & (cacop_va[0] ?dirty_way1[cacop_va[11:4]] : dirty_way0[cacop_va[11:4]]));
+ 
+ always @(posedge clk) begin
+     if (reset) begin
+@@ -374,9 +345,7 @@ end
+ always @(*) begin
+     case (current_state)
+         IDLE: begin  //当处于IDLE，如果此时有请求，且不与write_buffer冲突，转入LOOKUP
+-                     //对于cacop，现转入LOOKUP态，再处理，storetag直接处理就可以了
+-                     //这个地方需要指出，只有当writebuf处于IDLE时，才能转入LOOKUP
+-            if((valid & ~conflict_writing)|| (cacop_Hit_Invalidate_valid | cacop_Index_Invalidate_valid)) begin
++            if(valid & ~conflict_writing) begin
+                 next_state = LOOKUP;
+             end else begin
+                 next_state = IDLE;
+@@ -384,12 +353,7 @@ always @(*) begin
+         end
+         LOOKUP: begin //cache hit时,如果此时没有冲突，有请求继续LOOKUP，否则IDLE
+                       //cache miss时，转入MISS态即可
+-                      //对于cacop，到这个状态得到对应的tagv数据后，如果是dirty，转入miss态，否则转回IDLE
+-            if(~reg_valid & cacop_part_is_dirty)
+-                next_state = MISS;
+-            else if(~reg_valid & ~cacop_part_is_dirty)
+-                next_state = IDLE;
+-            else if(~cache_hit & reg_valid) 
++            if(~cache_hit)
+                 next_state = MISS;
+             else if((~valid) || conflict_writing || conflict_load_same_addr)
+                 next_state = IDLE;
+@@ -399,8 +363,7 @@ always @(*) begin
+         MISS: begin  //当处于MISS态时，需要等待wr_rdy为高，方便一进入就对其进行写回操作
+                      //这个地方还有一个问题，就是如果替换的块是干净的，就不需要写回，直接REPLACE
+                      //对于uncache的情况，也是直接REPLACE（此处未实现）
+-            if((((((wr_rdy == 1) || ~replace_part_is_dirty) && ~uncache_type) || (uncache_type && wr_rdy == 1))&reg_valid)
+-                || (~reg_valid &&wr_rdy == 1))
++            if((((wr_rdy == 1) || ~replace_part_is_dirty) && ~uncache_type) || (uncache_type && wr_rdy == 1))
+                 next_state = REPLACE;
+             else
+                 next_state = MISS;
+@@ -408,9 +371,7 @@ always @(*) begin
+         REPLACE: begin  //处于这个状态，需要把对应脏块写回，并发出读请求
+                         //由于是在wr_rdy == 1时进入的这个状态，因此如果要写回脏块一定可以立刻满足
+                         //uncache的写可以直接写然后返回
+-            if(~reg_valid)
+-                next_state = IDLE;
+-            else if(uncache_type && (reg_op == WRITE))
++            if(uncache_type && (reg_op == WRITE))
+                 next_state = IDLE;
+             else if(rd_rdy == 1)
+                 next_state = REFILL;
+@@ -438,7 +399,7 @@ end
+ always @(*) begin
+     case (writebuf_cstate)
+         WRITEBUF_IDLE:begin  //处于LOOKUP,cache写命中转入写状态
+-            if((current_state == LOOKUP) && (reg_op == WRITE) && cache_hit && reg_valid)
++            if((current_state == LOOKUP) && (reg_op == WRITE) && cache_hit)
+                 writebuf_nstate = WRITEBUF_WRITE;
+             else
+                 writebuf_nstate = WRITEBUF_IDLE;
+@@ -466,12 +427,8 @@ assign lookup_ram_en = ((current_state == IDLE) && (valid & ~conflict_writing))
+ //以及为什么一定要多定义一个信号的原因
+ 
+ assign hitwrite = (writebuf_cstate == WRITEBUF_WRITE);
+-assign replace = (current_state == MISS) && (reg_valid) &&
++assign replace = (current_state == MISS) && 
+                  ((wr_rdy == 1) || (~replace_part_is_dirty));
+-wire   replace_cacop;
+-assign replace_cacop = (current_state == MISS) && (~reg_valid) && (wr_rdy == 1);
+-wire   cacop_invalid_way;
+-assign cacop_invalid_way = ((cacop_Index_Invalidate | cacop_store_tag) & (cacop_va[0]));
+ //这个地方的refill就有一点麻烦，按照书上的设计，应该用于更新data数据和tagv数据
+ //但是现在分为4个bank进行存储，因此此处的refill信号只能表示当前处于refill状态，具体更新哪个bank
+ //还需要临时决定
+@@ -487,8 +444,7 @@ always @(posedge clk) begin
+         reg_wstrb  <= 4'b0;
+         reg_wdata  <= 32'b0;
+         reg_mem_type <= 2'b0;
+-        reg_valid  <= 1'b0;
+-    end else if(lookup || ( cacop_Hit_Invalidate_valid || cacop_Index_Invalidate_valid)) begin
++    end else if(lookup) begin
+         reg_op     <= op;
+         reg_index  <= index;
+         reg_tag    <= tag;
+@@ -496,7 +452,6 @@ always @(posedge clk) begin
+         reg_wstrb  <= wstrb;
+         reg_wdata  <= wdata;
+         reg_mem_type <= mem_type;
+-        reg_valid  <= valid; 
+     end
+ end
+ assign uncache_type = (reg_mem_type == 2'b00);
+@@ -537,24 +492,6 @@ always @(posedge clk)begin
+         dirty_way0 <= 256'b0;
+         dirty_way1 <= 256'b0;
+     end
+-    else if(cacop_store_tag_valid)begin
+-        if(~cacop_va[0])
+-            dirty_way0[cacop_va[11:4]] <= 1'b0;
+-        else
+-            dirty_way1[cacop_va[11:4]] <= 1'b0;
+-    end
+-    else if(current_state == LOOKUP && ~reg_valid && cacop_Index_Invalidate)begin
+-        if(~cacop_va[0])
+-            dirty_way0[cacop_va[11:4]] <= 1'b0;
+-        else 
+-            dirty_way1[cacop_va[11:4]] <= 1'b0;
+-    end
+-    else if(current_state == LOOKUP && ~reg_valid &&cacop_Hit_Invalidate &&cache_hit_cacop) begin
+-        if(way0_hit_cacop)
+-            dirty_way0[reg_index] <= 1'b0;
+-        else 
+-            dirty_way1[reg_index] <= 1'b0; 
+-    end
+     else if(hitwrite)begin
+         if(way0_hit)
+             dirty_way0[write_index] <= 1'b1;
+@@ -572,29 +509,14 @@ end
+ //{tag,v}表的操作
+ //在lookup,replace时读，在refill时写，可以重复写多次，也可以就在replace切到refill时写一次
+ //采取后一种实现,在最后一个数返回时写一次就够
+-assign tagv_addr =  {8{(cacop_store_tag_valid | cacop_Index_Invalidate)}} & cacop_va[11:4] |
+-                    {8{(cacop_Hit_Invalidate_valid)}} & index |
+-                    {8{(~cacop_Hit_Invalidate_valid &cacop_Hit_Invalidate)}} & reg_index |
+-                    {8{lookup_ram_en}} & index |
++assign tagv_addr = {8{lookup_ram_en}} & index |
+                     {8{replace}} & reg_index |
+                     {8{refill}} & reg_index;
+-assign tagv_wdata = {21{refill}} & {reg_tag, 1'b1};
+-assign tagv_w0_en = lookup_ram_en || ((replace || refill)) && (replace_way == 1'b0)
+-                    || (cacop_store_tag_valid | cacop_Hit_Invalidate_valid | cacop_Index_Invalidate_valid) //IDLE时，store tag写，另外两个读
+-                    || (current_state == LOOKUP && ~reg_valid && ~cacop_invalid_way && cacop_Index_Invalidate)
+-                    || (current_state == LOOKUP && ~reg_valid && way0_hit_cacop && cacop_Hit_Invalidate);  //LOOKUP时，修改为无效
+-assign tagv_w1_en = lookup_ram_en || ((replace || refill)) && (replace_way == 1'b1)
+-                    || (cacop_store_tag_valid | cacop_Hit_Invalidate_valid | cacop_Index_Invalidate_valid)
+-                    || (current_state == LOOKUP && ~reg_valid && cacop_invalid_way && cacop_Index_Invalidate)
+-                    || (current_state == LOOKUP && ~reg_valid && way1_hit_cacop && cacop_Hit_Invalidate);
+-assign tagv_w0_we = refill&& (replace_way == 1'b0)&& ret_valid && ret_last && (~uncache_type)
+-                    || (cacop_store_tag_valid && ~cacop_invalid_way)
+-                    || (current_state == LOOKUP && ~reg_valid && ~cacop_invalid_way && cacop_Index_Invalidate)
+-                    || (current_state == LOOKUP && ~reg_valid && way0_hit_cacop && cacop_Hit_Invalidate);  
+-assign tagv_w1_we = refill&& (replace_way == 1'b1)&& ret_valid && ret_last && (~uncache_type)
+-                     || (cacop_store_tag_valid && cacop_invalid_way)
+-                     || (current_state == LOOKUP && ~reg_valid && cacop_invalid_way && cacop_Index_Invalidate)
+-                     || (current_state == LOOKUP && ~reg_valid && way1_hit_cacop && cacop_Hit_Invalidate);
++assign tagv_wdata = {reg_tag, 1'b1}; //写入时有效位为1
++assign tagv_w0_en = lookup_ram_en || ((replace || refill)) && (replace_way == 1'b0);
++assign tagv_w1_en = lookup_ram_en || ((replace || refill)) && (replace_way == 1'b1);
++assign tagv_w0_we = refill&& (replace_way == 1'b0)&& ret_valid && ret_last && (~uncache_type);
++assign tagv_w1_we = refill&& (replace_way == 1'b1)&& ret_valid && ret_last && (~uncache_type);
+ 
+ //data表的操作
+ //在lookup,replace时读，在hitwrite,refill时写
+@@ -605,43 +527,35 @@ assign tagv_w1_we = refill&& (replace_way == 1'b1)&& ret_valid && ret_last && (~
+ assign data_w0_en[0] =  lookup_ram_en && (offset[3:2] == 2'b00) ||
+                         hitwrite && (write_bank == 2'b00) && (write_way == 1'b0) ||
+                         (replace) && (replace_way == 1'b0) ||
+-                        refill && (replace_way == 1'b0)&& (~uncache_type)
+-                        || (replace_cacop); //这个地方讲道理应该是当对应bank数据返回再片选，但是也可以一直片选，不是对应路就读，也没有什么额外的问题
++                        refill && (replace_way == 1'b0)&& (~uncache_type); //这个地方讲道理应该是当对应bank数据返回再片选，但是也可以一直片选，不是对应路就读，也没有什么额外的问题
+ assign data_w0_en[1] =  lookup_ram_en && (offset[3:2] == 2'b01) ||
+                         hitwrite && (write_bank == 2'b01) && (write_way == 1'b0) ||
+                         (replace) && (replace_way == 1'b0) ||
+-                        refill && (replace_way == 1'b0)&& (~uncache_type)
+-                        || (replace_cacop);
++                        refill && (replace_way == 1'b0)&& (~uncache_type);
+ assign data_w0_en[2] =  lookup_ram_en && (offset[3:2] == 2'b10) ||
+                         hitwrite && (write_bank == 2'b10) && (write_way == 1'b0) ||
+                         (replace) && (replace_way == 1'b0) ||
+-                        refill && (replace_way == 1'b0)&& (~uncache_type)
+-                        || (replace_cacop);
++                        refill && (replace_way == 1'b0)&& (~uncache_type);
+ assign data_w0_en[3] =  lookup_ram_en && (offset[3:2] == 2'b11) ||
+                         hitwrite && (write_bank == 2'b11) && (write_way == 1'b0) ||
+                         (replace) && (replace_way == 1'b0) ||
+-                        refill && (replace_way == 1'b0) && (~uncache_type)
+-                        || (replace_cacop);
++                        refill && (replace_way == 1'b0) && (~uncache_type);
+ assign data_w1_en[0] =  lookup_ram_en && (offset[3:2] == 2'b00) ||
+                         hitwrite && (write_bank == 2'b00) && (write_way == 1'b1) ||
+                         (replace) && (replace_way == 1'b1) ||
+-                        refill && (replace_way == 1'b1) && (~uncache_type)
+-                        || (replace_cacop);
++                        refill && (replace_way == 1'b1) && (~uncache_type);
+ assign data_w1_en[1] =  lookup_ram_en && (offset[3:2] == 2'b01) ||
+                         hitwrite && (write_bank == 2'b01) && (write_way == 1'b1) ||
+                         (replace) && (replace_way == 1'b1) ||
+-                        refill && (replace_way == 1'b1) && (~uncache_type)
+-                        || (replace_cacop);
++                        refill && (replace_way == 1'b1) && (~uncache_type);
+ assign data_w1_en[2] =  lookup_ram_en && (offset[3:2] == 2'b10) ||
+                         hitwrite && (write_bank == 2'b10) && (write_way == 1'b1) ||
+                         (replace) && (replace_way == 1'b1) ||
+-                        refill && (replace_way == 1'b1) && (~uncache_type)
+-                        || (replace_cacop);
++                        refill && (replace_way == 1'b1) && (~uncache_type);
+ assign data_w1_en[3] =  lookup_ram_en && (offset[3:2] == 2'b11) ||
+                         hitwrite && (write_bank == 2'b11) && (write_way == 1'b1) ||
+                         (replace) && (replace_way == 1'b1) ||
+-                        refill && (replace_way == 1'b1) && (~uncache_type)
+-                        || (replace_cacop);
++                        refill && (replace_way == 1'b1) && (~uncache_type);
+ //这个地方的we是一个四位信号，兼具表示是读写操作和写使能的作用
+ assign data_w0_we[0] = {4{hitwrite && (write_bank == 2'b00) && (write_way == 1'b0)}} & write_strb |
+                         {4{refill && (replace_way == 1'b0) && ret_valid && miss_return_count == 2'b00}} & 4'b1111;
+@@ -688,24 +602,16 @@ assign data_wdata = {32{hitwrite}} & write_data |
+ //对于下面两个信号，可能同时存在，要依据读的bank予以选择
+ assign data_addr[0] = (replace || refill) ? reg_index :
+                       (hitwrite && (write_bank == 2'b00)) ? write_index :
+-                      (cacop_Hit_Invalidate) ? reg_index:
+-                      (cacop_Index_Invalidate) ? cacop_va[11:4]:
+                       index;
+ assign data_addr[1] = (replace || refill) ? reg_index :
+                       (hitwrite && (write_bank == 2'b01)) ? write_index :
+-                      (cacop_Hit_Invalidate) ? reg_index:
+-                      (cacop_Index_Invalidate) ? cacop_va[11:4]:
+-                      index;
++                        index;
+ assign data_addr[2] = (replace || refill) ? reg_index :
+                       (hitwrite && (write_bank == 2'b10)) ? write_index :
+-                      (cacop_Hit_Invalidate) ? reg_index:
+-                      (cacop_Index_Invalidate) ? cacop_va[11:4]:
+-                      index;
++                        index;
+ assign data_addr[3] = (replace || refill) ? reg_index :
+                       (hitwrite && (write_bank == 2'b11)) ? write_index :
+-                      (cacop_Hit_Invalidate) ? reg_index:
+-                      (cacop_Index_Invalidate) ? cacop_va[11:4]:
+-                      index;
++                        index;
+ 
+ //cache与总线的交互接口
+ //对于uncache的写不用发出读请求
+@@ -724,63 +630,35 @@ reg wr_req_reg;
+ always @(posedge clk) begin
+     if (reset) begin
+         wr_req_reg <= 1'b0;
+-    end else if (current_state == MISS && next_state == REPLACE && 
+-    ((reg_valid && (replace_part_is_dirty||uncache_type) && ~(uncache_type && (reg_op == READ)))
+-    ||(~reg_valid))) begin
++    end else if (current_state == MISS && next_state == REPLACE && (replace_part_is_dirty||uncache_type) && ~(uncache_type && (reg_op == READ))) begin
+         wr_req_reg <= 1'b1;
+     end else if(wr_rdy)begin
+         wr_req_reg <= 1'b0;
+     end
+ end
+-reg [19:0] reg_cacop_tag; //由于在LOOKUP时，会将tag清零，因此需要保存写回的tag
+-always @(posedge clk) begin
+-    if(reset)
+-        reg_cacop_tag <= 20'b0;
+-    else if(cacop_va[0] & cacop_Index_Invalidate_valid)
+-        reg_cacop_tag <= tagv_w1_rdata[20:1];
+-    else if(~cacop_va[0] & cacop_Index_Invalidate_valid)
+-        reg_cacop_tag <= tagv_w0_rdata[20:1];
+-end
+ assign wr_req = wr_req_reg;
+-assign wr_type = {3{~uncache_type && reg_op && reg_valid}} & WRITE_BLOCK
+-                |{3{ uncache_type && reg_valid}} & WRITE_WORD
+-                |{3{~reg_valid}} & WRITE_BLOCK ; 
+-assign wr_addr = {32{uncache_type & reg_valid}} & {reg_tag, reg_index, reg_offset}
+-                |{32{~uncache_type & reg_valid}} &
++assign wr_type = {3{~uncache_type && reg_op}} & WRITE_BLOCK
++                |{3{ uncache_type}} & WRITE_WORD; 
++assign wr_addr = {32{uncache_type}} & {reg_tag, reg_index, reg_offset}
++                |{32{~uncache_type}} &
+                 ({32{replace_way == 1'b0}} & {way0_tag, reg_index, 4'b0000} |
+-                 {32{replace_way == 1'b1}} & {way1_tag, reg_index, 4'b0000})
+-                | {32{~reg_valid & cacop_Index_Invalidate}} & {reg_cacop_tag,cacop_va[11:4],4'b0000}
+-                | {32{~reg_valid & cacop_Hit_Invalidate}} & {reg_tag, reg_index,4'b0000};
+-assign wr_wstrb = {4{ uncache_type & reg_valid}} & reg_wstrb
+-                | {4{~uncache_type & reg_valid}} &4'b1111 
+-                | {4{~reg_valid}} & 4'b1111;
+-reg cacop_hit_way;
+-always @(posedge clk) begin
+-    if(reset)
+-        cacop_hit_way <= 1'b0;
+-    else if(cacop_Hit_Invalidate && current_state == LOOKUP && cache_hit_cacop)
+-        cacop_hit_way <= way1_hit_cacop;
+-end
+-assign wr_data = {128{uncache_type & reg_valid}} & {96'b0, reg_wdata}
+-                |{128{~uncache_type & reg_valid}} &
++                 {32{replace_way == 1'b1}} & {way1_tag, reg_index, 4'b0000});
++assign wr_wstrb = {4{ uncache_type}} & reg_wstrb
++                | {4{~uncache_type}} &4'b1111; 
++assign wr_data = {128{uncache_type}} & {96'b0, reg_wdata}
++                |{128{~uncache_type}} &
+                 ({128{replace_way == 1'b0}} & way0_data |
+-                 {128{replace_way == 1'b1}} & way1_data) 
+-                | {128{~reg_valid}} & 
+-                (cacop_Index_Invalidate ? (cacop_va[0] ? way1_data : way0_data) :
+-                 (cacop_hit_way ? way1_data : way0_data));
++                 {128{replace_way == 1'b1}} & way1_data);
+ //cpu接口信号
+ //此处有一个问题，就是如果addr_ok依赖于valid，那么在cpu内存应该注意req的发出不能依赖于addr_ok;
+ //这个地方addr_ok不用改变
+ assign addr_ok = (current_state == IDLE) && valid && (~conflict_writing)||
+                 (current_state == LOOKUP) && cache_hit && valid && (~conflict_writing & ~conflict_load_same_addr);
+ //这个地方data_ok,对于读操作的uncache，最后refill拉高，对于写操作的uncache，在进入REPLACE时拉高
+-assign data_ok = (current_state == LOOKUP) && (cache_hit || (reg_op == WRITE && ~uncache_type)) &&reg_valid ||
+-                (current_state == REPLACE) && (reg_op == WRITE && uncache_type&& reg_valid) ||
++assign data_ok = (current_state == LOOKUP) && (cache_hit || (reg_op == WRITE && ~uncache_type)) ||
++                (current_state == REPLACE) && (reg_op == WRITE && uncache_type) ||
+                 (current_state == REFILL) && ret_valid && ((miss_return_count == reg_offset[3:2] && ~uncache_type)|| (ret_last && uncache_type)) && (reg_op == READ);
+ //此处有一个细节，就是store操作即使不命中，也是直接data_ok拉高
+ //这样当refill时，只有读才需要拉高data_ok
+ assign rdata = load_data;
+-assign cacop_finish = (cacop_store_tag_valid) || (current_state == LOOKUP && ~reg_valid && (cacop_Hit_Invalidate | cacop_Index_Invalidate) && ~cacop_part_is_dirty) ||
+-                      (current_state == REPLACE && ~reg_valid && (cacop_Hit_Invalidate | cacop_Index_Invalidate)) ;
+-
+ endmodule
+\ No newline at end of file
+diff --git a/../exp23/myCPU/mycpu_core.v b/../exp22/myCPU/mycpu_core.v
+index ba0903c..64c9900 100644
+--- a/../exp23/myCPU/mycpu_core.v
++++ b/../exp22/myCPU/mycpu_core.v
+@@ -47,15 +47,6 @@ wire vaddr_sign_wb;
+ 
+ wire vaddr_about_inst_happen_in_wb;
+ wire invalidtlb_happen_in_ex;
+-wire [1:0]  cacop_op;
+-wire        cacop_req_icache;
+-wire        cacop_req_dcache;
+-wire [31:0] cacop_va;
+-wire        cacop_finish_icache;
+-wire        cacop_finish_dcache;
+-wire        cacop_finish_in_exe;
+-wire        cacop_inst_in_exe;
+-wire        cacop_inst_in_id;
+ 
+ wire [31:0] invalidtlb_pc;
+ wire [31:0] vaddr_about_inst_pc;
+@@ -153,10 +144,7 @@ IF IF_PART(
+     .invalidtlb_happen_in_ex(invalidtlb_happen_in_ex),
+     .invalidtlb_pc(invalidtlb_pc),
+     .vaddr_about_inst_happen_in_wb(vaddr_about_inst_happen_in_wb),
+-    .vaddr_about_inst_pc(vaddr_about_inst_pc),
+-    .cacop_finish_in_exe(cacop_finish_in_exe),
+-    .cacop_inst_in_id(cacop_inst_in_id),
+-    .cacop_inst_in_exe(cacop_inst_in_exe)
++    .vaddr_about_inst_pc(vaddr_about_inst_pc)
+ );
+ 
+ wire        allow_in_id;
+@@ -238,9 +226,7 @@ ID ID_PART(
+     .exception_state_tlb(exception_state_tlb_id),
+     .tlb_related_inst(tlb_related_inst_id),
+     .invalidtlb_happen_in_ex(invalidtlb_happen_in_ex),
+-    .vaddr_about_inst_happen_in_wb(vaddr_about_inst_happen_in_wb),
+-    .cacop_finish_in_exe(cacop_finish_in_exe),
+-    .cacop_inst_in_id(cacop_inst_in_id)
++    .vaddr_about_inst_happen_in_wb(vaddr_about_inst_happen_in_wb)
+ );
+ 
+ wire        allow_in_exe;
+@@ -357,16 +343,7 @@ EXE EXE_PART(
+     .csr_asid  (csr_asid_state  ),
+     .tlbehi_vppn (tlbehi_vppn),
+     .tlbsrch_csr_message(tlbsrch_csr_message_exe),
+-    .datm_csr    (datm_csr    ),
+-    .cacop_op  (cacop_op  ),
+-    .cacop_req_icache(cacop_req_icache),
+-    .cacop_req_dcache(cacop_req_dcache),
+-    .cacop_va  (cacop_va),
+-    .cacop_finish_dcache(cacop_finish_dcache),
+-    .cacop_finish_icache(cacop_finish_icache),
+-    .cacop_inst_in_exe(cacop_inst_in_exe),
+-    .cacop_finish_in_exe(cacop_finish_in_exe),
+-    .cacop_inst_in_id(cacop_inst_in_id)
++    .datm_csr    (datm_csr    )
+ );
+ 
+ wire ready_go_mem;
+@@ -776,20 +753,14 @@ wire [2:0] icache_wr_type;
+ wire [31:0] icache_wr_addr;
+ wire [3:0] icache_wr_strb;
+ wire [127:0] icache_wr_data;
+-wire [11:0] icache_addr_vrtl;
+-wire [19:0] icache_addr_tag;
+-wire cacop_req_hit_invalid;
+-assign cacop_req_hit_invalid = cacop_req_icache & (cacop_op == 2'b10);
+-assign icache_addr_vrtl = cacop_req_hit_invalid ? data_addr_vrtl : inst_addr_vrtl;
+-assign icache_addr_tag = cacop_req_hit_invalid ? data_sram_addr[31:12] : inst_sram_addr[31:12];
+ cache icache(
+     .clk    (clk                       ),
+     .resetn (resetn                    ),
+     .valid  (inst_sram_req              ),
+     .op     (inst_sram_wr               ),
+-    .index  (icache_addr_vrtl[11:4]       ),
+-    .tag    (icache_addr_tag              ),
+-    .offset (icache_addr_vrtl[3:0]        ),
++    .index  (inst_addr_vrtl[11:4]       ),
++    .tag    (inst_sram_addr[31:12]      ),
++    .offset (inst_addr_vrtl[3:0]        ),
+     .wstrb  (inst_sram_wstrb            ),
+     .wdata  (inst_sram_wdata            ),
+     .addr_ok(inst_sram_addr_ok            ),
+@@ -812,12 +783,7 @@ cache icache(
+     .wr_addr(icache_wr_addr             ),
+     .wr_wstrb(icache_wr_strb             ),
+     .wr_data(icache_wr_data             ),
+-    .wr_rdy (icache_wr_rdy              ),
+-
+-    .cacop_req (cacop_req_icache),
+-    .cacop_op  (cacop_op),
+-    .cacop_va  (cacop_va),
+-    .cacop_finish(cacop_finish_icache)
++    .wr_rdy (icache_wr_rdy              )
+ );
+ 
+ cache dcache(
+@@ -849,11 +815,6 @@ cache dcache(
+     .wr_addr(dcache_wr_addr             ),
+     .wr_wstrb(dcache_wr_wstrb            ),
+     .wr_data(dcache_wr_data             ),
+-    .wr_rdy (dcache_wr_rdy              ),
+-
+-    .cacop_req (cacop_req_dcache),
+-    .cacop_op  (cacop_op),
+-    .cacop_va  (cacop_va),
+-    .cacop_finish(cacop_finish_dcache)
++    .wr_rdy (dcache_wr_rdy              )
+ );
+ endmodule
